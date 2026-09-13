@@ -2987,6 +2987,70 @@ with local context, with a measured sample-efficiency edge that the orders erase
 
 ---
 
+## 72. Phase 1 of the new plan — the parity wall FALLS: word-slot binding, vectors the compression loss teaches (`wstate.py`)
+
+The §70/§71 ceiling (every no-copy channel ties the orders) is broken — not by more capacity or
+better credit, but by fixing **what the state representation can hold**. The experiment,
+`wstate.py` (7 arms, genmem gate: copy OFF, 13-byte-decontaminated held-out wt103, deterministic
+mask, scrambled noise floor), was driven by a micro-probe (a rare word predicting an outcome two
+words later — invisible to order≤6) that killed hypotheses one at a time:
+
+- **v1 — EMA state + word-embedding projection** (the §70 diagnosis's named fix): at scale,
+  `learned == randemb == bitsonly` **to four decimals**, all slightly *above* baseline. The
+  projection does nothing. **v2 — exact per-word trace-bank credit** (long-range RTRL for
+  embeddings, exact for frozen W): no change. **v3 — nonlinear bucket readout** (prims-style
+  count table keyed on sign-quantised state): no change. Credit ✗, readout ✗.
+- **The diagnosis the probe forces:** the EMA *superposes* ~5 recent words; the cue word is a
+  minority of the signal, so **no function of the superposed state — linear or bucketed — can
+  isolate one word's identity**. The binding, not the projection and not the credit, is the wall.
+- **v4 — WORD SLOTS:** an LRU of the last 6 distinct words, each bound to its **own** 8-dim
+  vector fed *directly* as mixer features. Binding is exact (a slot holds one word), and the
+  credit becomes trivially exact — a slot persists ~6 words, so every bit while it is resident
+  gradients the word's vector. No RTRL needed at all. The probe passes at once
+  (`slots < slotsr < bitsonly` at the outcome byte).
+
+**Result (leak-free wt103, copy OFF, decontaminated held-out bits/byte, seed 0):**
+
+| train | baseline | bitsonly (m=32 EMA) | slotsr (frozen identity) | **slots (learned)** | scrambled |
+|---|---|---|---|---|---|
+| 150 KB | 2.3675 | 2.3733 | 2.3767 | **2.3705** | 2.5240 |
+| 450 KB | 2.2758 | 2.2821 | 2.2858 | **2.2769** | 2.4334 |
+| 1200 KB | 2.3715 | 2.3796 | 2.3818 | **2.3695** | 2.5398 |
+| 2700 KB | 2.4793 | 2.4886 | 2.4904 | **2.4766** | 2.6584 |
+
+- **The cross:** slots sit −0.003 at 150 KB and **cross below the orders baseline at ≥1.2 MB**
+  (+0.0020, +0.0027 at 1.2/2.7 MB) — margin **growing with data**, the first no-copy channel in
+  the project's history to pass the orders. **Replicated on seeds 1,2:** +0.0015…+0.0031 vs
+  baseline at every seed×size.
+- **Attribution is clean:** slots beat `bitsonly` (same EMA + bucket, no slots) by +0.012 at
+  2.7 MB — the slot channel carries the win. Slots beat `slotsr` (identical architecture,
+  **frozen random vectors**) by **+0.011…+0.014 at every seed×size**, and `slotsr` never crosses
+  baseline — the win is specifically the **vectors the compression loss teaches**, i.e. MEANING
+  beyond lexical identity, on copy-off, span-excised held-out data. The noise floor is +0.15 away.
+- Every EMA-superposition variant reproduces §70's parity-minus **inside the same runs**.
+
+**The strong.rs port — an honest negative that sharpens the thesis.** The same channel was
+ported into the production engine (`BLMSLOTS=1`, env-gated; default verified **bit-identical**,
+0.217011 on the 11 MB benchmark). At 11 MB it does **not** help: +0.0001…+0.0002 worse across
+SBITS/LR_S/ALRS sweeps — strong's hashed order-8..32 contexts (1–5 words), word/prev-word models
+and two match models **already cover short-range word identity**. Identity memory is *cheap* at
+lpaq-class capacity; what production lacks is **similarity** — generalisation across related
+words, soft content-based retrieval beyond exact match. That is Phase 2, and the port rule going
+forward: **an instrument channel earns its Rust port only by beating strong itself, not the
+orders-only rail.**
+
+**Significance.** The §69–71 plateau was a *representation* artefact: superposed smooth state
+cannot bind, so it relearns what the orders already know. Binding recent-word identity into
+slots — with vectors trained by nothing but the compression loss — turns the same tiny budget
+into net held-out generalisation that grows with data. The durable assets: the probe-driven
+diagnosis method (kill hypotheses at byte-scale before trusting a 1-hour run), the 7-arm
+instrument with its identity/noise/scrambled controls, and a replicated positive control for
+the first time in the no-copy track. Next: similarity features on top of the slots
+(`dot(E[cur], E[slot])` coherence, embedding-bucketed count experts that share evidence across
+the word tail), then soft retrieval — the match model's generalisation.
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").
