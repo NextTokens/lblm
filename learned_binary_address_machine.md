@@ -3051,6 +3051,58 @@ the word tail), then soft retrieval — the match model's generalisation.
 
 ---
 
+## 73. Phase 2, step 1 — hard similarity keying honestly fails; the soft-retrieval requirement (`wstate.py`)
+
+Phase 2's thesis (from §72's port negative): identity memory is cheap at production capacity;
+the open lever is **similarity** — generalisation across related words. Step 1 tested it in the
+instrument with the cheapest possible mechanism: a count-table expert keyed not by word ID but
+by the **embedding bucket** (8 sign bits of the current word's loss-trained vector — words the
+loss has aligned share counts, so evidence should transfer across the word tail), plus
+coherence features `dot(E[last word], E[slot word])`, against an **identity-keyed expert** of
+identical placement (`slotsw`, 4096 word-hash slots ≈ a word model). Two design iterations
+were forced by honesty checks: (i) the first version keyed on the *growing prefix id*, whose
+vectors are untrained inside multi-letter words and dead at boundaries — a flaw the identity
+control is immune to (unfair A/B); rekeyed both arms on the last completed word. (ii) A v6
+**subword-composed init** (fastText-style: char-3gram vectors trained by shared slot credit;
+unseen words initialise inside their morphological neighbourhood) was added and probe-verified
+mechanically — composed init does place a held-out nonce word at its family-shared trigram
+vector — but it cannot rescue hard buckets.
+
+**Probes:** the tail probe (morphological families, few occurrences) — identity best, bucket
+close, subword between. The **zero-shot probe** (held-out family member, first exposure,
+learning off): composed init lands in the family direction, yet the sign-quantised bucket still
+misroutes — **hard buckets destroy exactly the graded information similarity carries.**
+
+**Scale (the §72 gate, same protocol, same seeds):**
+
+| train | baseline | slotsr | **slots (§72)** | slotsw (identity expert) | semsim (bucket+dots) | scrambled |
+|---|---|---|---|---|---|---|
+| 150 KB | 2.3675 | 2.3767 | **2.3705** | 2.3655 | 2.3749 | 2.5240 |
+| 450 KB | 2.2758 | 2.2858 | **2.2769** | 2.2754 | 2.2806 | 2.4334 |
+| 1200 KB | 2.3715 | 2.3818 | **2.3695** | 2.3732 | 2.3743 | 2.5398 |
+| 2700 KB | 2.4793 | 2.4904 | **2.4766** | 2.4824 | 2.4826 | 2.6584 |
+
+- **The §72 anchors reproduce exactly** (slots row identical — determinism check).
+- **Neither expert survives at scale.** `slotsw` is best at 150–450 KB (the word-model
+  sample-efficiency edge) then turns into a **drag** at 2.7 MB (2.4824 vs slots' 2.4766) — the
+  §71 pattern replaying: the orders absorb common-word signal, the extra correlated expert only
+  adds estimation variance. `semsim` never crosses and **hurts bare slots** by 0.004–0.006 at
+  every size: the hard bucket fires spurious early correlations the mixer must then unlearn.
+- The bare **slots channel remains the only thing that beats baseline** (crossing intact:
+  +0.002/+0.0027 at 1.2/2.7 MB).
+
+**Verdict — a requirement, not a dead end.** Similarity keying in *hard* (quantised) form is
+honestly negative on this instrument: at CPU scale it loses to identity keying, which itself
+loses to doing nothing at scale. Combined with the probes, the diagnosis is precise: graded
+similarity must be read out **softly** — similarity-weighted voting over retrieved
+neighbours — which Python cannot afford (a per-byte k-NN over the vocabulary) but the Rust
+engine can: **LSH/simhash buckets over the §72 vector table → top-k neighbours of the current
+word → similarity-weighted word-model counts → one mixer input**; vectors trained by the
+existing exact slot credit. That is Phase 2 proper, and per the §72 rule it earns its place
+only by beating **strong itself** at 11 MB, not the orders-only rail.
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").

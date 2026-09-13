@@ -36,6 +36,19 @@ to the embedding). Arms:
     slotsr : EMA(bits) + bucket + slots with FROZEN random vectors  (identity control)
     slots  : EMA(bits) + bucket + slots with vectors LEARNED by the loss (THE HEADLINE)
   slots vs bitsonly = the slot channel's effect; slots vs slotsr = MEANING vs identity.
+  RESULT (§72): slots CROSS below the orders baseline at >=1.2MB, margin growing with data,
+  replicated across seeds; slotsr never crosses -> the win is the learned vectors.
+
+v5 (Phase 2, similarity): the strong.rs port showed identity slots add NOTHING to an
+lpaq-class engine (hashed order-8..32 already span 1-5 words) -- the open lever is
+SIMILARITY, generalisation across related words. Two new arms, both = slots + ONE extra
+readout of the CURRENT word (prefix id, like the word model):
+    slotsw : + an IDENTITY-keyed count expert  (word-hash bucket, phase, partial) [control]
+    semsim : + an EMBEDDING-BUCKET count expert (8 sign bits of the current word's vector ->
+             256 buckets; words the loss has ALIGNED share counts -> evidence transfers
+             across the word tail)  + S coherence features dot(E[cur], E[slot_i])
+  semsim < slotsw (same capacity, same placement) => SIMILARITY beats IDENTITY keying --
+  the Phase-2 thesis. semsim < slots => the similarity layer adds margin on its own.
 
 Words: maximal [A-Za-z0-9] runs, lowercased, FNV-1a rolling hash -> id (prefix-visible, like
 the core's word model). id 0 (no active word) -> zero embedding. The EMA of word embeddings is
@@ -78,7 +91,11 @@ FNV0 = 0x811C9DC5
 MAXREC = 48                    # recent-word trace bank size (eligibility, evict-oldest)
 S = 6                          # word slots (LRU of recent distinct words)
 SD = 8                         # slot vector dims
-SLOT_ARMS = ("slots", "slotsr", "scrambled")
+SLOT_ARMS = ("slots", "slotsr", "slotsw", "semsim", "semfast", "scrambled")
+LEARNED_SLOT_ARMS = ("slots", "slotsw", "semsim", "semfast")   # slot vectors trained by the loss
+SIM_ARMS = ("slotsw", "semsim")            # v5: +word expert (identity vs embedding bucket)
+XKEY_ARMS = ("slotsw", "semsim", "semfast")
+SUBWORD_ARMS = ("semfast",)                # v6: char-3gram-composed vector init (fastText-style)
 
 
 def is_wb(b):
@@ -113,11 +130,19 @@ class Model:
         self.NIN = self.NM + ((M + 1) if self.use_state else 0)     # +1 = bucket expert
         if arm in SLOT_ARMS:
             self.NIN += S * SD                                     # word-slot features
+        if arm in XKEY_ARMS:
+            self.NIN += 1                                          # word-expert feature
+        if arm in ("semsim", "semfast"):
+            self.NIN += S                                          # coherence dot features
         self.w = [0.0] * (self.NIN + 1)
         self.wg = [0.0] * (self.NIN + 1)
         self.tab = [dict() for _ in ORDERS]
         self.btab = {}                        # bucket expert counts (state arms)
         self.buck = 0
+        self.xtab = {}                        # v5 word-expert counts (slotsw/semsim)
+        self.xb = 0                           # its key bucket, refreshed per byte
+        self.curv = None                      # current word's vector cache (semsim)
+        self.curdots = [0.0] * S              # dot(E[cur], E[slot_i]) cache (semsim)
         self.slots = [0] * S                   # LRU word ids (0 = empty)
         self.semb = {}                         # word id -> SD floats (slot content)
         self.sgrad = {}                        # word id -> per-byte accumulated exact credit
@@ -136,6 +161,10 @@ class Model:
             self.wcount = {}               # word id -> occurrences (diagnostics only)
             self.rec = {}                  # word id -> m-vector eligibility trace (learned arm)
             self.recorder = []             # insertion order for evict-oldest
+            self.gtab = {}                 # v6: char-3gram id -> SD vector (subword table)
+            self.tri_of = {}               # v6: word id -> its 3gram ids (for init + credit share)
+            self.wtri = []                 # v6: rolling 3grams of the current word
+            self.wtail2 = (0, 0)           # v6: last two letter bytes (for 3gram ids)
         if arm == "scrambled":
             self._sr = random.Random(1234)
 
@@ -148,8 +177,17 @@ class Model:
     def _word_after(self, b):
         if is_wb(b):
             self.wh = ((self.wh ^ (b | 32)) * 0x01000193) & 0xFFFFFFFF
+            c = b | 32
+            b1, b2 = self.wtail2
+            if b1:                                   # a full 3gram is available
+                self.wtri.append((b1 << 16) | (b2 << 8) | c)
+            self.wtail2 = (b2, c)
             return self.wh | (1 << 31)     # never 0
+        if self.wh:                       # v6: a word just completed — stash its 3grams
+            self.tri_of.setdefault(self.wh | (1 << 31), tuple(self.wtri))
         self.wh = FNV0
+        self.wtri = []
+        self.wtail2 = (0, 0)
         return 0
 
     def _vec(self, wid):
@@ -164,8 +202,23 @@ class Model:
     def _svec(self, wid):
         v = self.semb.get(wid)
         if v is None:
+            tris = self.tri_of.get(wid) if self.arm in SUBWORD_ARMS else None
+            base = None
+            if tris:
+                acc = [0.0] * SD; n = 0
+                for t in tris:
+                    g = self.gtab.get(t)
+                    if g is not None:
+                        for k in range(SD):
+                            acc[k] += g[k]
+                        n += 1
+                if n:
+                    base = [a / n for a in acc]      # mean of TRAINED 3gram vectors
             r = random.Random((wid * 40503) & 0x7FFFFFFF)
-            v = [(r.random() - 0.5) * 0.1 for _ in range(SD)]
+            if base is not None:
+                v = [base[k] + (r.random() - 0.5) * 0.02 for k in range(SD)]   # composed init
+            else:
+                v = [(r.random() - 0.5) * 0.1 for _ in range(SD)]
             self.semb[wid] = v
         self.wcount[wid] = self.wcount.get(wid, 0) + 1
         return v
@@ -200,6 +253,13 @@ class Model:
                             sts[i] = v[k]; i += 1
                     else:
                         i += SD
+        if self.arm in XKEY_ARMS:
+            c = self.xtab.get((self.xb << 10) | (self.phase << 7) | self.cur)
+            n0, n1 = (c[0], c[1]) if c else (0, 0)
+            sts[i] = stretch((n1 + 0.2) / (n0 + n1 + 0.4)); i += 1
+        if self.arm == "semsim":
+            for j in range(S):
+                sts[i] = self.curdots[j]; i += 1
         sts[self.NIN] = 1.0
         d = 0.0; w = self.w
         for j in range(self.NIN + 1):
@@ -216,7 +276,7 @@ class Model:
             sb = self.sbase; w = self.w; g = p - y          # dL/dz, nats
             for j in range(M):
                 self.G[j] += g * w[sb + j]                  # accumulate dL/dh_j over the byte
-        if self.arm == "slots":
+        if self.arm in LEARNED_SLOT_ARMS:
             # exact credit to slot-embedding dims: mixer weight at predict time, per bit
             g = p - y
             base = self.NM + M + 1; w = self.w
@@ -246,6 +306,12 @@ class Model:
                 if c is None:
                     c = [0, 0]; self.btab[key] = c
                 c[y] += 1
+            if self.arm in XKEY_ARMS:
+                key = (self.xb << 10) | (self.phase << 7) | self.cur
+                c = self.xtab.get(key)
+                if c is None:
+                    c = [0, 0]; self.xtab[key] = c
+                c[y] += 1
         self.cur = (self.cur << 1) | y; self.phase += 1
         if self.phase == 8:
             self._byte_end(learn)
@@ -254,6 +320,8 @@ class Model:
     def _byte_end(self, learn):
         b = self.cur & 0xFF
         wid = self._word_after(b)
+        if self.arm in SUBWORD_ARMS and wid and wid not in self.tri_of:
+            self.tri_of[wid] = tuple(self.wtri)     # stash the prefix's 3grams so far
         if self.arm in SLOT_ARMS and wid:
             sl = self.slots
             if wid in sl:
@@ -261,7 +329,7 @@ class Model:
             else:
                 del sl[-1]
             sl.insert(0, wid)
-        if self.arm == "slots" and self.sgrad:
+        if self.arm in LEARNED_SLOT_ARMS and self.sgrad:
             for w_id, gr in self.sgrad.items():
                 v = self.semb.get(w_id)
                 if v is None:
@@ -269,6 +337,20 @@ class Model:
                 for k in range(SD):
                     e = v[k] - self.lr_s * gr[k]
                     v[k] = 1.0 if e > 1.0 else (-1.0 if e < -1.0 else e)
+                if self.arm in SUBWORD_ARMS:
+                    # v6: share the credit with the word's char-3grams (1/len each) so future
+                    # UNSEEN words composing those 3grams start inside their morphological family
+                    tris = self.tri_of.get(w_id)
+                    if tris:
+                        sc = self.lr_s / len(tris)
+                        for t in tris:
+                            gv = self.gtab.get(t)
+                            if gv is None:
+                                gv = [0.0] * SD
+                                self.gtab[t] = gv
+                            for k in range(SD):
+                                e = gv[k] - sc * gr[k]
+                                gv[k] = 1.0 if e > 1.0 else (-1.0 if e < -1.0 else e)
             self.sgrad.clear()
         if self.use_state and self.arm != "scrambled" and learn:
             # 1) per-word eligibility traces (v2 long-range credit): decay every recent word's
@@ -323,6 +405,39 @@ class Model:
             self.buck = buck
             self.G = [0.0] * M
             self.last_word = wid
+        if self.arm in XKEY_ARMS:
+            # v5 (revised): key on the LAST COMPLETED word (slots[0]) — its vector is TRAINED
+            # (it was slot-resident), the key fires at word boundaries AND interiors, and the
+            # identity/embedding arms key the SAME positions. (The first version keyed on the
+            # growing prefix id, whose vectors are untrained for multi-letter interiors and dead
+            # at boundaries — a flaw the identity control is immune to, i.e. an unfair A/B.)
+            w_id = self.slots[0] if self.use_state else 0
+            if not w_id:
+                self.xb = 0; self.curv = None
+                for si in range(S):
+                    self.curdots[si] = 0.0
+            elif self.arm == "slotsw":
+                self.xb = (((w_id * 2654435761) & 0xFFFFFFFF) >> 20) & 0xFFF     # 4096 identity slots
+            else:
+                v = self._svec(w_id)
+                xb = 0
+                for k in range(SD):
+                    xb = (xb << 1) | (1 if v[k] > 0.0 else 0)
+                self.xb = xb
+                self.curv = v
+                self.curdots[0] = 0.0                       # slot 0 IS the key word; skip self
+                for si in range(1, S):
+                    w2 = self.slots[si]
+                    if w2:
+                        sv = self.semb.get(w2)
+                        if sv is None:
+                            sv = self._svec(w2)
+                        d = 0.0
+                        for k in range(SD):
+                            d += v[k] * sv[k]
+                        self.curdots[si] = d
+                    else:
+                        self.curdots[si] = 0.0
         self.htail = ((self.htail << 8) | b) & ((1 << 48) - 1); self.cur = 0; self.phase = 0
 
     def _flush(self, wid, A):
@@ -399,7 +514,7 @@ def neighbor_payload(model, tr, te):
     """for vector-armed models: top-frequency words (len>=3) + 3 nearest neighbours by cosine."""
     if model is None:
         return None
-    table = model.semb if model.arm in ("slots", "slotsr") else getattr(model, "emb", {})
+    table = model.semb if model.arm in SLOT_ARMS else getattr(model, "emb", {})
     if not table:
         return None
     ids = id2str(tr + te)
@@ -422,7 +537,7 @@ def neighbor_payload(model, tr, te):
 
 
 # ---------------- main ----------------
-ARMS = ["baseline", "bitsonly", "randemb", "learned", "slotsr", "slots", "scrambled"]
+ARMS = ["baseline", "slots", "slotsw", "semsim", "semfast", "scrambled"]
 
 
 def report(results, sizes, secs):
@@ -435,37 +550,43 @@ def report(results, sizes, secs):
     print("-" * len(hdr))
     def series(f):
         return [round(f(by, kb), 4) for kb in sizes]
-    # primary (v4): the word-slot channel
-    help_s = series(lambda B, kb: B["baseline"][kb] - B["slots"][kb])         # >0 slots help
-    chan = series(lambda B, kb: B["bitsonly"][kb] - B["slots"][kb])           # >0 slot channel works
-    sem_s = series(lambda B, kb: B["slotsr"][kb] - B["slots"][kb])            # >0 MEANING vs identity
-    noi_s = series(lambda B, kb: B["scrambled"][kb] - B["slots"][kb])         # >0 real signal
-    # secondary (v3): the EMA embedding projection
-    help_e = series(lambda B, kb: B["baseline"][kb] - B["learned"][kb])
-    sem_e = series(lambda B, kb: B["randemb"][kb] - B["learned"][kb])
-    print(f"SLOTS  vs baseline (help)         : {help_s}")
-    print(f"SLOTS  vs bitsonly (channel)      : {chan}")
-    print(f"SLOTS  vs slotsr (MEANING)        : {sem_s}")
-    print(f"SLOTS  vs scrambled (noise floor) : {noi_s}")
-    print(f"EMAemb vs baseline (help)         : {help_e}")
-    print(f"EMAemb vs randemb (meaning)       : {sem_e}")
+    # primary (v5): similarity vs identity on the same channel
+    help_m = series(lambda B, kb: B["baseline"][kb] - B["semsim"][kb])         # >0 semsim helps
+    sim_id = series(lambda B, kb: B["slotsw"][kb] - B["semsim"][kb])           # >0 SIMILARITY beats IDENTITY
+    sim_marg = series(lambda B, kb: B["slots"][kb] - B["semsim"][kb])          # >0 the layer adds margin
+    noi_m = series(lambda B, kb: B["scrambled"][kb] - B["semsim"][kb])         # >0 real signal
+    print(f"SEMSIM vs baseline (help)          : {help_m}")
+    print(f"SEMSIM vs slotsw (SIMILARITY>IDENT): {sim_id}")
+    print(f"SEMSIM vs slots (layer margin)     : {sim_marg}")
+    print(f"SEMSIM vs scrambled (noise floor)  : {noi_m}")
+    # §72 anchors
+    help_s = series(lambda B, kb: B["baseline"][kb] - B["slots"][kb])
+    print(f"slots vs baseline (SS72 anchor)    : {help_s}")
+    if "slotsr" in by:
+        sem_s = series(lambda B, kb: B["slotsr"][kb] - B["slots"][kb])
+        print(f"slots vs slotsr (SS72 anchor)      : {sem_s}")
+    if "semfast" in by:
+        sub = series(lambda B, kb: B["semsim"][kb] - B["semfast"][kb])       # >0 subword init helps
+        sub_id = series(lambda B, kb: B["slotsw"][kb] - B["semfast"][kb])    # >0 subword+sem beats identity
+        print(f"SEMFAST vs semsim (subword init)   : {sub}")
+        print(f"SEMFAST vs slotsw (vs identity)    : {sub_id}")
     print()
-    crossed = any(h > 0.001 for h in help_s)
-    semantic = sem_s[-1] > 0.002 and sum(1 for s in sem_s if s > 0) >= len(sem_s) // 2 + 1
-    real = all(n > 0.003 for n in noi_s)
+    crossed = any(h > 0.001 for h in help_m)
+    similarity = sim_id[-1] > 0.0005 and sum(1 for s in sim_id if s > 0) >= len(sim_id) // 2 + 1
     print("VERDICT:", end=" ")
-    if crossed and semantic and real:
-        print("CROSS -- the word-slot semantic state beats the orders baseline on copy-ablated,")
-        print("  decontaminated held-out; the win is the SLOT CHANNEL (vs bitsonly) and MEANING")
-        print("  beyond lexical identity (vs slotsr). The SS70 wall fell. Next: strong.rs port.")
-    elif crossed and real:
-        print("LEXICAL -- slots help (beat baseline + noise floor) but slots ~= slotsr: the gain")
-        print("  is word-identity binding, not semantic generalization. Half the wall fell: the")
-        print("  state now CARRIES words; making the vectors MEAN is the remaining step.")
-    elif real and any(s > 0 for s in sem_s) and (help_s[-1] > help_s[0] - 0.001):
-        print("PROMISING -- real signal and a semantic margin, crossing needs more scale/capacity.")
+    if crossed and similarity:
+        print("CROSS+SIMILARITY -- the embedding-bucket expert beats the identity-keyed control")
+        print("  (same capacity, same placement) and the composite beats the orders baseline:")
+        print("  generalisation across RELATED words, not just bound identity. The Phase-2 thesis")
+        print("  holds on the instrument. Next: strong.rs port under the beats-strong rule.")
+    elif crossed:
+        print("CROSS (identity-level) -- semsim beats baseline but ties slotsw: the win is still")
+        print("  bound identity, not similarity. Iterate (bigger SD, subword-composed init).")
+    elif similarity and all(n > 0.003 for n in noi_m):
+        print("SIM-WITHOUT-CROSS -- similarity beats identity on the layer, but the composite does")
+        print("  not beat baseline at these sizes. The mechanism works; scale/capacity to cross.")
     else:
-        print("NEGATIVE -- no robust signal beyond the noise floor. Honest; iterate or stop.")
+        print("NEGATIVE -- no robust signal. Honest; iterate or stop.")
     print(f"\n[{secs:.0f}s total]")
 
 
