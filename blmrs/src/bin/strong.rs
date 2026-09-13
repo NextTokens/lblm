@@ -15,6 +15,16 @@
 //! model, tuned DELTA/learning-rates, and the indirect (ICM/StateMap) models — for ~3.4% lower bits/bit
 //! on real text (measured 11 MB, see learned_binary_address_machine.md §63). DELTA/ALR/ALRF are
 //! env-overridable. Usage: strong <path> [byte_cap] [obits].
+//!
+//! §72 WORD-SLOT CHANNEL (env BLMSLOTS=1, default OFF = bit-identical baseline): an LRU of the
+//! last SLOTS=6 COMPLETED words, each bound to its own SD=8-dim vector learned ONLINE by the
+//! compression loss (wstate.py: the EMA superposition cannot bind word identity — no readout of it
+//! can — but slots isolate it; learned vectors beat frozen identity vectors on copy-ablated,
+//! decontaminated held-out, crossing below the order-only baseline at >=1.2MB). The SLOTS*SD slot
+//! dims feed a dedicated head added into the GLOBAL mixer's input (before squash), trained by the
+//! same e_g signal; per-bit credit slot_vec[k] += (y-p_g)*head_w[k] accumulates per byte and is
+//! applied to the word's vector at byte end (LR_S). Vectors live in a tagged flat table keyed by
+//! word hash (deterministic splitmix init), evict-on-collision like every other table.
 
 use std::env;
 use std::fs;
@@ -42,6 +52,19 @@ const RMS_EPS: f64 = 1e-4;
 #[inline]
 fn envf(name: &str, default: f64) -> f64 {
     env::var(name).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+}
+
+// ---- §72 word-slot channel ----
+const SLOTS: usize = 6;               // LRU of recent completed words
+const SD: usize = 8;                  // vector dims per word
+
+#[inline]
+fn splitmix(x: &mut u64) -> u64 {
+    *x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *x;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 #[inline]
@@ -159,6 +182,10 @@ fn main() {
     let d2 = 2.0 * delta;
     let alr_lr = envf("ALR", 0.0010);    // tuned mixer LR (was 0.0013)
     let alr_lrf = envf("ALRF", 0.0010);  // tuned final-mixer LR
+    let use_slots = env::var("BLMSLOTS").map(|s| s == "1").unwrap_or(false);
+    let lr_s = envf("LR_S", 0.02);       // §72 slot-vector learning rate
+    let sbits: u32 = envf("SBITS", 22.0) as u32;   // slot-vector table bits (evict-on-collision)
+    let alr_slot = envf("ALRS", 0.0015); // §72 slot-head mixer LR (own knob, default between strong's and wstate's)
 
     let mut raw = fs::read(path).expect("read input");
     if cap > 0 && raw.len() > cap { raw.truncate(cap); }
@@ -200,6 +227,16 @@ fn main() {
     let mut apm6 = Apm::new(4096, 33, 0.005); // ctx = order-3 byte hash + phase
     let mut mm = MatchModel::new(22, 5);
     let mut mm2 = MatchModel::new(22, 8); // a second, longer match model (min length 8)
+
+    // §72 word-slot channel state
+    let mut semb: Vec<[f64; SD]> = vec![[0.0f64; SD]; 1usize << sbits];   // word vectors
+    let mut setag: Vec<u64> = vec![0u64; 1usize << sbits];                // word id as tag
+    let mut sl = [0u64; SLOTS];                    // LRU word ids (0 = empty)
+    let mut slot_w = [0.0f64; SLOTS * SD];         // head weights into the global mixer
+    let mut slot_wg = [0.0f64; SLOTS * SD];        // RMSProp state for the head
+    let mut sgrad = [[0.0f64; SD]; SLOTS];         // per-byte exact credit per slot
+    let mut slot_feat = [[0.0f64; SD]; SLOTS];     // cached features for the current byte
+    let mut slot_tabi = [0usize; SLOTS];           // table index of each slot's word
 
     let mut hist: Vec<u8> = Vec::with_capacity(raw.len());
     let mut cur: u64 = 0;
@@ -319,6 +356,13 @@ fn main() {
         let p_sel2 = squash(d2);
         let mut dg = 0.0;
         for k in 0..NW { dg += gmix[k] * sts[k]; }
+        if use_slots {
+            for si in 0..SLOTS {
+                let f = &slot_feat[si];
+                let b = si * SD;
+                for k in 0..SD { dg += slot_w[b + k] * f[k]; }
+            }
+        }
         let p_g = squash(dg);
         let ssel = stretch(p_sel);
         let ssel2 = stretch(p_sel2);
@@ -383,6 +427,24 @@ fn main() {
             gmix_g[k] = RMS_DECAY * gmix_g[k] + ord_ * gk * gk;
             gmix[k] += alr_lr * gk / (gmix_g[k].sqrt() + RMS_EPS);
         }
+        // §72: train the slot head on e_g and accumulate EXACT per-bit credit for the vectors
+        // (wstate.py semantics: E-credit uses the PRE-update head weight)
+        if use_slots {
+            for si in 0..SLOTS {
+                if sl[si] == 0 { continue; }
+                let f = &slot_feat[si];
+                let b = si * SD;
+                let g = &mut sgrad[si];
+                for k in 0..SD {
+                    let gk = e_g * f[k];
+                    let idx = b + k;
+                    let w_old = slot_w[idx];
+                    slot_wg[idx] = RMS_DECAY * slot_wg[idx] + ord_ * gk * gk;
+                    slot_w[idx] += alr_slot * gk / (slot_wg[idx].sqrt() + RMS_EPS);
+                    g[k] += e_g * w_old;
+                }
+            }
+        }
         // count bumps + recency halving
         let yi = y as usize;
         for k in 0..NM {
@@ -424,6 +486,19 @@ fn main() {
         cur = (cur << 1) | (y as u64);
         phase += 1;
         if phase == 8 {
+            // §72: apply this byte's accumulated vector credit to each slot's word
+            if use_slots {
+                for si in 0..SLOTS {
+                    if sl[si] == 0 { continue; }
+                    let ti = slot_tabi[si];
+                    let g = &mut sgrad[si];
+                    for k in 0..SD {
+                        let e = semb[ti][k] - lr_s * g[k];
+                        semb[ti][k] = if e > 1.0 { 1.0 } else if e < -1.0 { -1.0 } else { e };
+                        g[k] = 0.0;
+                    }
+                }
+            }
             let b = (cur & 0xFF) as u8;
             hist.push(b);
             mm.update_after_byte(&hist, byte_pos);
@@ -432,8 +507,39 @@ fn main() {
             if (65..=90).contains(&b) || (97..=122).contains(&b) {
                 word_hash = (word_hash.wrapping_mul(131) + ((b | 0x20) as u64)) & 0xFFF_FFFF;
             } else {
-                if word_hash != 0 { prev_word_hash = word_hash; } // remember the word that just ended
-                word_hash = 0;
+                if word_hash != 0 {
+                    prev_word_hash = word_hash; // remember the word that just ended
+                    if use_slots {
+                        // LRU move-to-front / insert of the completed word
+                        let wid = word_hash;
+                        let mut pos = SLOTS;
+                        for (j, &w) in sl.iter().enumerate() { if w == wid { pos = j; break; } }
+                        if pos < SLOTS { sl.copy_within(0..pos, 1); }
+                        else { sl.copy_within(0..SLOTS - 1, 1); }
+                        sl[0] = wid;
+                        // reload features for every slot (handles LRU shifts + rare evictions)
+                        for si in 0..SLOTS {
+                            let w = sl[si];
+                            if w == 0 { slot_feat[si] = [0.0; SD]; continue; }
+                            let h = w.wrapping_mul(MULT);
+                            let ti = (h >> (64 - sbits)) as usize;
+                            if setag[ti] != w {
+                                setag[ti] = w;
+                                let mut s = w;
+                                let mut v = [0.0f64; SD];
+                                for k in 0..SD {
+                                    v[k] = (splitmix(&mut s) as f64 / u64::MAX as f64 - 0.5) * 0.1;
+                                }
+                                semb[ti] = v;
+                            }
+                            slot_feat[si] = semb[ti];
+                            slot_tabi[si] = ti;
+                        }
+                    }
+                    word_hash = 0;
+                } else {
+                    word_hash = 0;
+                }
             }
             prev2 = prev_byte; prev_byte = b as u64; cur = 0; phase = 0; byte_pos += 1;
             for hk in 0..NH {

@@ -73,6 +73,7 @@ res_*
 !genmem.py
 !lstate.py
 !prims.py
+!wstate.py
 data/
 gv_out/
 
