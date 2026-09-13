@@ -150,6 +150,10 @@ class Model:
         self.sbase = self.NM
         self.wh = FNV0                 # rolling FNV-1a over lowercased word bytes
         self.last_word = 0
+        self.gtab = {}                 # v6: char-3gram id -> SD vector (subword table)
+        self.tri_of = {}               # v6: word id -> its 3gram ids (for init + credit share)
+        self.wtri = []                 # v6: rolling 3grams of the current word
+        self.wtail2 = (0, 0)           # v6: last two letter bytes (for 3gram ids)
         if self.use_state:
             self.a = [AMIN + (AMAX - AMIN) * (j / (M - 1)) for j in range(M)]
             rng = random.Random(seed)
@@ -161,10 +165,6 @@ class Model:
             self.wcount = {}               # word id -> occurrences (diagnostics only)
             self.rec = {}                  # word id -> m-vector eligibility trace (learned arm)
             self.recorder = []             # insertion order for evict-oldest
-            self.gtab = {}                 # v6: char-3gram id -> SD vector (subword table)
-            self.tri_of = {}               # v6: word id -> its 3gram ids (for init + credit share)
-            self.wtri = []                 # v6: rolling 3grams of the current word
-            self.wtail2 = (0, 0)           # v6: last two letter bytes (for 3gram ids)
         if arm == "scrambled":
             self._sr = random.Random(1234)
 
@@ -183,7 +183,7 @@ class Model:
                 self.wtri.append((b1 << 16) | (b2 << 8) | c)
             self.wtail2 = (b2, c)
             return self.wh | (1 << 31)     # never 0
-        if self.wh:                       # v6: a word just completed — stash its 3grams
+        if self.wh and self.arm in SUBWORD_ARMS:   # v6: a word just completed — stash its 3grams
             self.tri_of.setdefault(self.wh | (1 << 31), tuple(self.wtri))
         self.wh = FNV0
         self.wtri = []
