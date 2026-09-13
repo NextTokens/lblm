@@ -25,7 +25,18 @@
 //! same e_g signal; per-bit credit slot_vec[k] += (y-p_g)*head_w[k] accumulates per byte and is
 //! applied to the word's vector at byte end (LR_S). Vectors live in a tagged flat table keyed by
 //! word hash (deterministic splitmix init), evict-on-collision like every other table.
+//!
+//! §74 SOFT RETRIEVAL (env BLSOFT=1, implies the §72 machinery): §73 proved HARD similarity keys
+//! (sign buckets as count-table keys) fail — quantisation destroys the graded information. The
+//! soft readout instead: the §72 vectors are indexed in an LSH structure (sign bucket + the 8
+//! one-bit-flip neighbours, capped lists); once per byte the last completed word retrieves its
+//! top-SOFTK neighbours by NORMALISED dot (>= SIMMIN); per bit, the neighbours' OWN word-model
+//! counts (the existing wdc tables, same keys) are voted similarity-weighted into a single
+//! stretch() head on the global mixer. This is "predict what follows words SIMILAR to the last
+//! word" — generalisation across the word tail that identity keys cannot give. Port rule (§72):
+//! earns its place only by beating strong's own 11MB baseline (0.217011).
 
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::time::Instant;
@@ -65,6 +76,33 @@ fn splitmix(x: &mut u64) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
+}
+
+#[inline]
+fn bucket_of(v: &[f64; SD]) -> u8 {
+    let mut b = 0u8;
+    for k in 0..SD { b = (b << 1) | (v[k] > 0.0) as u8; }
+    b
+}
+
+/// §74: keep the LSH index current for a word whose vector exists (sign bucket, capped lists).
+fn index_update(w: u64, sbits: u32, semb: &[[f64; SD]], setag: &[u64],
+                bucket_vec: &mut [Vec<u64>], word_bucket: &mut HashMap<u64, u8>) {
+    let ti = (w.wrapping_mul(MULT) >> (64 - sbits)) as usize;
+    if setag[ti] != w { return; }                       // no vector resident
+    let b = bucket_of(&semb[ti]) as usize;
+    let unchanged = matches!(word_bucket.get(&w), Some(&old) if old as usize == b);
+    if !unchanged {
+        if let Some(&old) = word_bucket.get(&w) {
+            bucket_vec[old as usize].retain(|&x| x != w);
+        }
+        let bv = &mut bucket_vec[b];
+        if !bv.contains(&w) {
+            if bv.len() >= 64 { bv.remove(0); }
+            bv.push(w);
+        }
+        word_bucket.insert(w, b as u8);
+    }
 }
 
 #[inline]
@@ -183,9 +221,13 @@ fn main() {
     let alr_lr = envf("ALR", 0.0010);    // tuned mixer LR (was 0.0013)
     let alr_lrf = envf("ALRF", 0.0010);  // tuned final-mixer LR
     let use_slots = env::var("BLMSLOTS").map(|s| s == "1").unwrap_or(false);
+    let blsoft = env::var("BLSOFT").map(|s| s == "1").unwrap_or(false);
+    let use_slots = use_slots || blsoft;      // §74 soft retrieval needs the §72 vectors
     let lr_s = envf("LR_S", 0.02);       // §72 slot-vector learning rate
     let sbits: u32 = envf("SBITS", 22.0) as u32;   // slot-vector table bits (evict-on-collision)
     let alr_slot = envf("ALRS", 0.0015); // §72 slot-head mixer LR (own knob, default between strong's and wstate's)
+    let soft_k = envf("SOFTK", 8.0) as usize;      // §74 retrieved neighbours per byte
+    let simmin = envf("SIMMIN", 0.25);             // §74 cosine floor for a neighbour vote
 
     let mut raw = fs::read(path).expect("read input");
     if cap > 0 && raw.len() > cap { raw.truncate(cap); }
@@ -237,6 +279,13 @@ fn main() {
     let mut sgrad = [[0.0f64; SD]; SLOTS];         // per-byte exact credit per slot
     let mut slot_feat = [[0.0f64; SD]; SLOTS];     // cached features for the current byte
     let mut slot_tabi = [0usize; SLOTS];           // table index of each slot's word
+
+    // §74 soft-retrieval state: LSH index over the §72 vectors + one trained mixer head
+    let mut bucket_vec: Vec<Vec<u64>> = vec![Vec::new(); 256];
+    let mut word_bucket: HashMap<u64, u8> = HashMap::new();
+    let mut soft_nbrs: Vec<(f64, u64)> = Vec::new();   // (cosine, word) refreshed once per byte
+    let mut soft_w = 0.0f64;                           // the head weight into the global mixer
+    let mut soft_wg = 0.0f64;                          // RMSProp state for the head
 
     let mut hist: Vec<u8> = Vec::with_capacity(raw.len());
     let mut cur: u64 = 0;
@@ -363,6 +412,32 @@ fn main() {
                 for k in 0..SD { dg += slot_w[b + k] * f[k]; }
             }
         }
+        // §74: similarity-weighted vote of the retrieved neighbours' OWN word-model counts
+        let mut soft_st = 0.0f64;
+        let mut use_soft = false;
+        if blsoft && !soft_nbrs.is_empty() {
+            let mut psum = 0.0f64;
+            let mut ssum = 0.0f64;
+            for &(sim, w) in &soft_nbrs {
+                let wk = (w << 12) | ((((1u64 << phase) | cur) << 3) | (phase as u64));
+                let h = wk.wrapping_mul(MULT);
+                let ti = (h >> (64 - obits)) as usize;
+                let want = ((h >> (64 - obits - 8)) & 0xFF) as u8;
+                let pi = if wdtag[ti] == want {
+                    let (n0, n1) = (wdc[2 * ti] as f64, wdc[2 * ti + 1] as f64);
+                    (n1 + delta) / (n0 + n1 + d2)
+                } else {
+                    0.5
+                };
+                psum += sim * pi;
+                ssum += sim;
+            }
+            if ssum > 0.0 {
+                soft_st = stretch(psum / ssum);
+                use_soft = true;
+                dg += soft_w * soft_st;
+            }
+        }
         let p_g = squash(dg);
         let ssel = stretch(p_sel);
         let ssel2 = stretch(p_sel2);
@@ -444,6 +519,12 @@ fn main() {
                     g[k] += e_g * w_old;
                 }
             }
+        }
+        // §74: train the soft-retrieval head on the same global-mixer error
+        if blsoft && use_soft {
+            let gk = e_g * soft_st;
+            soft_wg = RMS_DECAY * soft_wg + ord_ * gk * gk;
+            soft_w += alr_lr * gk / (soft_wg.sqrt() + RMS_EPS);
         }
         // count bumps + recency halving
         let yi = y as usize;
@@ -534,6 +615,53 @@ fn main() {
                             }
                             slot_feat[si] = semb[ti];
                             slot_tabi[si] = ti;
+                        }
+                        // §74: refresh the LSH index for slot words, then retrieve the
+                        // neighbours of sl[0] (its sign bucket + the 8 one-bit flips)
+                        for si in 0..SLOTS {
+                            if sl[si] != 0 {
+                                index_update(sl[si], sbits, &semb, &setag,
+                                             &mut bucket_vec, &mut word_bucket);
+                            }
+                        }
+                        if blsoft {
+                            soft_nbrs.clear();
+                            let w0 = sl[0];
+                            if w0 != 0 {
+                                let ti0 = (w0.wrapping_mul(MULT) >> (64 - sbits)) as usize;
+                                if setag[ti0] == w0 {
+                                    let v0 = semb[ti0];
+                                    let mut n0 = 0.0f64;
+                                    for k in 0..SD { n0 += v0[k] * v0[k]; }
+                                    n0 = n0.sqrt();
+                                    if n0 > 1e-9 {
+                                        let b0 = bucket_of(&v0) as usize;
+                                        for j in 0..9usize {
+                                            let bb = if j == 8 { b0 } else { b0 ^ (1 << j) };
+                                            for ii in 0..bucket_vec[bb].len() {
+                                                let w = bucket_vec[bb][ii];
+                                                if w == w0 { continue; }
+                                                if soft_nbrs.iter().any(|&(_, x)| x == w) { continue; }
+                                                let tiw = (w.wrapping_mul(MULT) >> (64 - sbits)) as usize;
+                                                if setag[tiw] != w { continue; }
+                                                let vw = semb[tiw];
+                                                let mut nw = 0.0f64;
+                                                let mut dt = 0.0f64;
+                                                for k in 0..SD {
+                                                    dt += v0[k] * vw[k];
+                                                    nw += vw[k] * vw[k];
+                                                }
+                                                nw = nw.sqrt();
+                                                if nw < 1e-9 { continue; }
+                                                let sim = dt / (n0 * nw);
+                                                if sim > simmin { soft_nbrs.push((sim, w)); }
+                                            }
+                                        }
+                                        soft_nbrs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+                                        soft_nbrs.truncate(soft_k);
+                                    }
+                                }
+                            }
                         }
                     }
                     word_hash = 0;

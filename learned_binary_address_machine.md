@@ -3103,6 +3103,48 @@ only by beating **strong itself** at 11 MB, not the orders-only rail.
 
 ---
 
+## 74. Phase 2, step 2 — soft retrieval in the production engine: built, measured, honestly inert (`strong.rs`, `BLSOFT=1`)
+
+The §73 requirement, implemented exactly as named: the §72 word vectors indexed in an LSH
+structure (sign bucket + the 8 one-bit-flip neighbours, capped lists); once per byte the last
+completed word retrieves its top-`SOFTK` neighbours by normalised dot (≥ `SIMMIN`); per bit the
+neighbours' **own word-model counts** (the existing `wdc` tables, same keys — no new statistics
+store) are voted similarity-weighted into one trained `stretch()` head on the global mixer.
+Default path verified **bit-identical** (0.231704 @300 KB; the 11 MB baseline re-run reproduces
+0.217011 on the same binary).
+
+**Port-rule A/B at 11 MB (obits 25, whole-stream bits/bit):**
+
+| config | bits/bit | vs baseline |
+|---|---|---|
+| baseline (default) | **0.217011** | — |
+| BLSOFT=1 (k=8, sim≥0.25) | 0.217101 | +0.00009 |
+| BLSOFT=1 (k=16) | 0.217099 | +0.00009 |
+| BLSOFT=1 (simmin=0, pure kNN) | 0.217097 | +0.00009 |
+| BLSOFT=1 (ALRS=0.003) | 0.217159 | +0.00015 |
+
+(1 MB pair: 0.216588 baseline vs 0.216742 soft — same sign.) The head correctly learns to
+ignore the vote: at 11 MB single-pass, tail words have received too few credits for their
+vector neighbourhoods to be informative, so the similarity vote degenerates toward the word
+model / unigram average the engine already has — and the residual cost is the §72 slot
+channel's own +0.00005 drag plus a little noise.
+
+**The pattern across §72–§74 is now three independent mechanisms hitting the same production
+wall:** identity slots, hard similarity keys, and properly-engineered soft retrieval all add
+nothing to an lpaq-class engine on natural text at CPU scale — while the instrument
+(`wstate.py`) proves the same channels carry real, growing, replicated signal against a weak
+baseline. The reconciliation: **hashed order-8..32 + word + match models already span 1–5-word
+memory; what the new channels add is real but below the engine's resolution at this scale.**
+Where the evidence still points: the instrument's slots margin GROWS with data
+(+0.0020 @1.2 MB → +0.0027 @2.7 MB); the production redundancy verdict is measured at ONE
+scale (11 MB, single pass). The named next steps: (a) bigger single corpus (enwik8 slice)
+for strong+slots at 30–100 MB, where the growth curve either survives contact with the engine
+or the plateau claim hardens into a law; (b) long-range-dependency-rich streams (code, DNA,
+logs — §54's induced channels helped exactly there); (c) the instrument stays the discovery
+tool; ports follow the beats-strong rule.
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").
