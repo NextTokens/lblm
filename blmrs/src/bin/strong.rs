@@ -66,7 +66,8 @@ fn envf(name: &str, default: f64) -> f64 {
 }
 
 // ---- §72 word-slot channel ----
-const SLOTS: usize = 6;               // LRU of recent completed words
+const SLOTS: usize = 64;              // MAX LRU depth (active depth = env NSLOTS, default 6;
+                                      // deep slots reach BEYOND the hashed order-32 contexts)
 const SD: usize = 8;                  // vector dims per word
 
 #[inline]
@@ -228,6 +229,7 @@ fn main() {
     let alr_slot = envf("ALRS", 0.0015); // §72 slot-head mixer LR (own knob, default between strong's and wstate's)
     let soft_k = envf("SOFTK", 8.0) as usize;      // §74 retrieved neighbours per byte
     let simmin = envf("SIMMIN", 0.25);             // §74 cosine floor for a neighbour vote
+    let nslots: usize = (envf("NSLOTS", 6.0) as usize).clamp(1, SLOTS);   // §75 active LRU depth
 
     let mut raw = fs::read(path).expect("read input");
     if cap > 0 && raw.len() > cap { raw.truncate(cap); }
@@ -406,7 +408,7 @@ fn main() {
         let mut dg = 0.0;
         for k in 0..NW { dg += gmix[k] * sts[k]; }
         if use_slots {
-            for si in 0..SLOTS {
+            for si in 0..nslots {
                 let f = &slot_feat[si];
                 let b = si * SD;
                 for k in 0..SD { dg += slot_w[b + k] * f[k]; }
@@ -505,7 +507,7 @@ fn main() {
         // §72: train the slot head on e_g and accumulate EXACT per-bit credit for the vectors
         // (wstate.py semantics: E-credit uses the PRE-update head weight)
         if use_slots {
-            for si in 0..SLOTS {
+            for si in 0..nslots {
                 if sl[si] == 0 { continue; }
                 let f = &slot_feat[si];
                 let b = si * SD;
@@ -569,7 +571,7 @@ fn main() {
         if phase == 8 {
             // §72: apply this byte's accumulated vector credit to each slot's word
             if use_slots {
-                for si in 0..SLOTS {
+                for si in 0..nslots {
                     if sl[si] == 0 { continue; }
                     let ti = slot_tabi[si];
                     let g = &mut sgrad[si];
@@ -593,13 +595,13 @@ fn main() {
                     if use_slots {
                         // LRU move-to-front / insert of the completed word
                         let wid = word_hash;
-                        let mut pos = SLOTS;
-                        for (j, &w) in sl.iter().enumerate() { if w == wid { pos = j; break; } }
-                        if pos < SLOTS { sl.copy_within(0..pos, 1); }
-                        else { sl.copy_within(0..SLOTS - 1, 1); }
+                        let mut pos = nslots;
+                        for j in 0..nslots { if sl[j] == wid { pos = j; break; } }
+                        if pos < nslots { sl.copy_within(0..pos, 1); }
+                        else { sl.copy_within(0..nslots - 1, 1); }
                         sl[0] = wid;
                         // reload features for every slot (handles LRU shifts + rare evictions)
-                        for si in 0..SLOTS {
+                        for si in 0..nslots {
                             let w = sl[si];
                             if w == 0 { slot_feat[si] = [0.0; SD]; continue; }
                             let h = w.wrapping_mul(MULT);
@@ -618,7 +620,7 @@ fn main() {
                         }
                         // §74: refresh the LSH index for slot words, then retrieve the
                         // neighbours of sl[0] (its sign bucket + the 8 one-bit flips)
-                        for si in 0..SLOTS {
+                        for si in 0..nslots {
                             if sl[si] != 0 {
                                 index_update(sl[si], sbits, &semb, &setag,
                                              &mut bucket_vec, &mut word_bucket);

@@ -3145,6 +3145,54 @@ tool; ports follow the beats-strong rule.
 
 ---
 
+## 75. The frontier sweep — scale, long-range-rich domains, and the absorber identified (`wstate.py`, `strong.rs`)
+
+The two named next steps of §74, executed end to end, plus the mechanism question they forced.
+
+**(1) Scale — enwik8 30 MB, production A/B (obits 25):** baseline **0.205801**; BLMSLOTS=1
+0.205886 (+0.00009); BLSOFT=1 0.205893 (+0.00009). The production verdict is unchanged at
+2.7× the data: the §72/§74 channels remain inert in the engine.
+
+**(2) Long-range-rich domains — the instrument (same gate, copy OFF, decontaminated):**
+- **CODE is the channel's home turf.** Slots cross at EVERY size from 100 KB
+  (+0.0086/+0.0074/+0.0112/+0.0122 vs the orders baseline), with a larger meaning margin
+  (+0.017…+0.020 vs frozen vectors) — 3–4× the text margins, at 10× less data.
+- **DNA is an honest negative.** 6-mer-tokenised E. coli: slots WORSE than baseline at every
+  size (−0.02), learned worse than frozen (−0.01). Fixed-width k-mer "words" carry no
+  selectional structure; the codon/revcomp specialists (§55) are the right tools there.
+- Production on code (800 KB): baseline 0.150989, slots +0.00009, soft +0.00011 — code's
+  stronger signal does NOT survive the engine either.
+
+**(3) Two wrong absorber hypotheses, killed by experiment:**
+- **Depth/range ✗.** Deep slots (S=32/64; `NSLOTS` in strong.rs, `WSLOTS` in wstate.py):
+  monotonically worse in production (+0.0003…+0.0009) and a clean instrument NEGATIVE on
+  code (−0.03, meaning-margin gone). The channel is intrinsically SHALLOW (~6 words) —
+  depth drowns the readout in estimation variance. (Note what the noise floor shows: at
+  S=32 the scrambled-floor separation GREW to +0.64 vs +0.17 at S=6 — the state carries
+  MORE raw information at depth; the linear mixer cannot extract it. An information-vs-
+  readout gap, not an information absence.)
+- **Copy ✗.** The reconciliation arms (genmem's match model added to the instrument):
+  slots still beat orders+match — wt103 +0.002 at 1.2/2.7 MB, code +0.006…+0.013. The
+  no-copy gate was NOT feeding the slot channel copy's lunch.
+- **The word-model family ✓.** On code, adding an identity word-expert on TOP of slots
+  (`slotsw` vs `slots`) adds +0.028…+0.037 — word-keyed statistics carry even more signal
+  than slots in the same window. Production strong HAS that family (word, prev-word,
+  hashed orders 8–32). That is the absorber.
+
+**The law, stated.** The word-slot channel's signal is real, replicated, copy-independent,
+strongest on code — and lives inside the same ~6-word window that word-keyed statistics
+already harvest; any engine with a decent word model absorbs it. For a learned-memory
+channel to matter in production it must bind structure OUTSIDE that window; the S=32
+experiment shows the information exists at depth but the readout capacity (linear mixer +
+CPU-scale data per word) does not. The two live directions that remain: a regularised,
+nonlinear readout that can exploit depth (the deep-learning regime, now with a measured
+target), and domains with genuine long-distance references (cross-file code, structured
+documents) where the window assumption fails outright. The instrument-first method did its
+job: it located the channel (code ≫ text ≫ DNA), killed three wrong explanations, and
+named the true one.
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").

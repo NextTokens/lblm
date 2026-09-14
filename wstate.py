@@ -76,7 +76,7 @@ PROCESSES, so it re-implements the identical 13-gram excision with a determinist
 Run:  python wstate.py                (5 arms x sizes [150,450,1200,2700] KB, arms in parallel)
       python wstate.py --selftest     (tiny sequential sanity run)
 """
-import sys, math, random, time
+import sys, math, random, time, os
 from concurrent.futures import ProcessPoolExecutor
 
 from genmem import stretch, squash
@@ -89,13 +89,16 @@ XDIM = XDIM_BITS + D
 AMIN, AMAX = 0.85, 0.9995      # fixed decay spread -> timescales ~7 .. ~2000 bytes
 FNV0 = 0x811C9DC5
 MAXREC = 48                    # recent-word trace bank size (eligibility, evict-oldest)
-S = 6                          # word slots (LRU of recent distinct words)
+S = int(os.environ.get("WSLOTS", "6"))   # word slots (LRU depth; 6 = SS72; deep = beyond order-32 reach)
 SD = 8                         # slot vector dims
-SLOT_ARMS = ("slots", "slotsr", "slotsw", "semsim", "semfast", "scrambled")
-LEARNED_SLOT_ARMS = ("slots", "slotsw", "semsim", "semfast")   # slot vectors trained by the loss
+SLOT_ARMS = ("slots", "slotsr", "slotsw", "semsim", "semfast", "matchslots", "scrambled")
+LEARNED_SLOT_ARMS = ("slots", "slotsw", "semsim", "semfast", "matchslots")  # slot vectors trained by the loss
 SIM_ARMS = ("slotsw", "semsim")            # v5: +word expert (identity vs embedding bucket)
 XKEY_ARMS = ("slotsw", "semsim", "semfast")
 SUBWORD_ARMS = ("semfast",)                # v6: char-3gram-composed vector init (fastText-style)
+MATCH_ARMS = ("matchbase", "matchslots")   # §75: the reconciliation test -- copy ON in the
+# instrument too. If slots' crossing collapses with the match channel present, the no-copy win
+# lived on the signal the match model harvests in production (repeated word usage).
 
 
 def is_wb(b):
@@ -123,11 +126,13 @@ def clean_mask_det(train, test, K=13):
 
 class Model:
     def __init__(self, arm="baseline", lr=0.004, lr_rec=0.02, lr_emb=0.03, lr_s=0.02, seed=0):
-        self.arm = arm                     # baseline|bitsonly|randemb|learned|slotsr|slots|scrambled
-        self.use_state = arm != "baseline"
+        self.arm = arm
+        self.use_state = arm not in ("baseline", "matchbase")
+        self.use_match = arm in MATCH_ARMS     # §75 reconciliation arms: copy ON in the instrument
         self.lr, self.lr_rec, self.lr_emb, self.lr_s = lr, lr_rec, lr_emb, lr_s
         self.NM = len(ORDERS)
         self.NIN = self.NM + ((M + 1) if self.use_state else 0)     # +1 = bucket expert
+        self.NIN = self.NIN + (1 if self.use_match else 0)          # match/copy vote
         if arm in SLOT_ARMS:
             self.NIN += S * SD                                     # word-slot features
         if arm in XKEY_ARMS:
@@ -146,6 +151,11 @@ class Model:
         self.slots = [0] * S                   # LRU word ids (0 = empty)
         self.semb = {}                         # word id -> SD floats (slot content)
         self.sgrad = {}                        # word id -> per-byte accumulated exact credit
+        if self.use_match:                     # §75: genmem's byte match/copy model
+            self.MINLEN, self.GATE = 16, 18
+            self.mtab = {}
+            self.hist = bytearray()
+            self.mptr, self.mlen = -1, 0
         self.htail = 0; self.cur = 0; self.phase = 0
         self.sbase = self.NM
         self.wh = FNV0                 # rolling FNV-1a over lowercased word bytes
@@ -260,6 +270,14 @@ class Model:
         if self.arm == "semsim":
             for j in range(S):
                 sts[i] = self.curdots[j]; i += 1
+        if self.use_match:
+            st = 0.0
+            if self.mlen >= self.GATE and 0 <= self.mptr < len(self.hist):
+                pb = self.hist[self.mptr]
+                if self.phase == 0 or (pb >> (8 - self.phase)) == self.cur:
+                    bit = (pb >> (7 - self.phase)) & 1
+                    st = (1.6 + 0.35 * min(self.mlen, 28)) * (1 if bit else -1)
+            sts[i] = st
         sts[self.NIN] = 1.0
         d = 0.0; w = self.w
         for j in range(self.NIN + 1):
@@ -439,6 +457,25 @@ class Model:
                     else:
                         self.curdots[si] = 0.0
         self.htail = ((self.htail << 8) | b) & ((1 << 48) - 1); self.cur = 0; self.phase = 0
+        if self.use_match:
+            self._match_after(b)
+        return None
+
+    def _match_after(self, b):
+        """genmem's match model update: extend/break the candidate, register the context."""
+        n = len(self.hist)
+        self.hist.append(b)
+        if self.mlen > 0 and self.mptr < n - 1:
+            if self.hist[self.mptr] == self.hist[n - 1]:
+                self.mptr += 1; self.mlen = min(self.mlen + 1, 65535)
+            else:
+                self.mlen = 0; self.mptr = -1
+        if n >= self.MINLEN:
+            key = bytes(self.hist[n - self.MINLEN:n])
+            prev = self.mtab.get(key, -1)
+            self.mtab[key] = n
+            if self.mlen == 0 and 0 <= prev < n:
+                self.mptr = prev; self.mlen = self.MINLEN
 
     def _flush(self, wid, A):
         """apply accumulated eligibility: E[wid] -= lr_emb * (A . W[:, emb])"""
@@ -475,9 +512,9 @@ class Model:
 
 
 # ---------------- worker: one arm across all sizes ----------------
-def run_arm(arm, sizes, seed=0):
-    train_all = open("data/wt103_train.txt", "rb").read()
-    test_all = open("data/wt103_test.txt", "rb").read()
+def run_arm(arm, sizes, seed=0, train_path="data/wt103_train.txt", test_path="data/wt103_test.txt"):
+    train_all = open(train_path, "rb").read()
+    test_all = open(test_path, "rb").read()
     rows = []
     t0 = time.time()
     model = None
@@ -542,6 +579,7 @@ ARMS = ["baseline", "slots", "slotsw", "semsim", "semfast", "scrambled"]
 
 def report(results, sizes, secs):
     by = {arm: dict(rows) for arm, rows, _, _ in results}
+    present = set(by)
     print()
     hdr = (f"{'train':>8}" + "".join(f"{a:>10}" for a in ARMS))
     print(hdr); print("-" * len(hdr))
@@ -550,64 +588,70 @@ def report(results, sizes, secs):
     print("-" * len(hdr))
     def series(f):
         return [round(f(by, kb), 4) for kb in sizes]
-    # primary (v5): similarity vs identity on the same channel
-    help_m = series(lambda B, kb: B["baseline"][kb] - B["semsim"][kb])         # >0 semsim helps
-    sim_id = series(lambda B, kb: B["slotsw"][kb] - B["semsim"][kb])           # >0 SIMILARITY beats IDENTITY
-    sim_marg = series(lambda B, kb: B["slots"][kb] - B["semsim"][kb])          # >0 the layer adds margin
-    noi_m = series(lambda B, kb: B["scrambled"][kb] - B["semsim"][kb])         # >0 real signal
-    print(f"SEMSIM vs baseline (help)          : {help_m}")
-    print(f"SEMSIM vs slotsw (SIMILARITY>IDENT): {sim_id}")
-    print(f"SEMSIM vs slots (layer margin)     : {sim_marg}")
-    print(f"SEMSIM vs scrambled (noise floor)  : {noi_m}")
-    # §72 anchors
-    help_s = series(lambda B, kb: B["baseline"][kb] - B["slots"][kb])
-    print(f"slots vs baseline (SS72 anchor)    : {help_s}")
-    if "slotsr" in by:
-        sem_s = series(lambda B, kb: B["slotsr"][kb] - B["slots"][kb])
-        print(f"slots vs slotsr (SS72 anchor)      : {sem_s}")
-    if "semfast" in by:
+    if "slots" in present and "baseline" in present:
+        help_s = series(lambda B, kb: B["baseline"][kb] - B["slots"][kb])     # >0 slots help
+        print(f"slots  vs baseline (the crossing)   : {help_s}")
+        if "slotsr" in present:
+            sem_s = series(lambda B, kb: B["slotsr"][kb] - B["slots"][kb])    # >0 MEANING vs identity
+            print(f"slots  vs slotsr (MEANING)         : {sem_s}")
+        if "scrambled" in present:
+            noi_s = series(lambda B, kb: B["scrambled"][kb] - B["slots"][kb]) # >0 real signal
+            print(f"slots  vs scrambled (noise floor)  : {noi_s}")
+            if any(h > 0.001 for h in help_s) and all(n > 0.003 for n in noi_s):
+                verdict_s = "CROSS -- word-slot binding beats the orders baseline on THIS data too"
+            elif all(n > 0.003 for n in noi_s):
+                verdict_s = "signal present (above noise) but no cross at these sizes"
+            else:
+                verdict_s = "NEGATIVE on this data"
+            print(f"  VERDICT (slots): {verdict_s}")
+    if {"semsim", "baseline", "slotsw"} <= present:
+        help_m = series(lambda B, kb: B["baseline"][kb] - B["semsim"][kb])
+        sim_id = series(lambda B, kb: B["slotsw"][kb] - B["semsim"][kb])
+        sim_marg = series(lambda B, kb: B["slots"][kb] - B["semsim"][kb]) if "slots" in present else None
+        print(f"semsim vs baseline (help)          : {help_m}")
+        print(f"semsim vs slotsw (SIMILARITY>IDENT): {sim_id}")
+        if sim_marg is not None:
+            print(f"semsim vs slots (layer margin)     : {sim_marg}")
+    if "semfast" in present and {"semsim", "slotsw"} <= present:
         sub = series(lambda B, kb: B["semsim"][kb] - B["semfast"][kb])       # >0 subword init helps
         sub_id = series(lambda B, kb: B["slotsw"][kb] - B["semfast"][kb])    # >0 subword+sem beats identity
-        print(f"SEMFAST vs semsim (subword init)   : {sub}")
-        print(f"SEMFAST vs slotsw (vs identity)    : {sub_id}")
-    print()
-    crossed = any(h > 0.001 for h in help_m)
-    similarity = sim_id[-1] > 0.0005 and sum(1 for s in sim_id if s > 0) >= len(sim_id) // 2 + 1
-    print("VERDICT:", end=" ")
-    if crossed and similarity:
-        print("CROSS+SIMILARITY -- the embedding-bucket expert beats the identity-keyed control")
-        print("  (same capacity, same placement) and the composite beats the orders baseline:")
-        print("  generalisation across RELATED words, not just bound identity. The Phase-2 thesis")
-        print("  holds on the instrument. Next: strong.rs port under the beats-strong rule.")
-    elif crossed:
-        print("CROSS (identity-level) -- semsim beats baseline but ties slotsw: the win is still")
-        print("  bound identity, not similarity. Iterate (bigger SD, subword-composed init).")
-    elif similarity and all(n > 0.003 for n in noi_m):
-        print("SIM-WITHOUT-CROSS -- similarity beats identity on the layer, but the composite does")
-        print("  not beat baseline at these sizes. The mechanism works; scale/capacity to cross.")
-    else:
-        print("NEGATIVE -- no robust signal. Honest; iterate or stop.")
+        print(f"semfast vs semsim (subword init)   : {sub}")
+        print(f"semfast vs slotsw (vs identity)    : {sub_id}")
     print(f"\n[{secs:.0f}s total]")
 
 
 def main():
+    global ARMS
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
     selftest = "--selftest" in sys.argv
     sizes = [40] if selftest else [150, 450, 1200, 2700]
+    train_path = "data/wt103_train.txt"
+    test_path = "data/wt103_test.txt"
+    if "--train" in sys.argv:
+        train_path = sys.argv[sys.argv.index("--train") + 1]
+        test_path = sys.argv[sys.argv.index("--test") + 1]
+    if "--sizes" in sys.argv:
+        sizes = [int(x) for x in sys.argv[sys.argv.index("--sizes") + 1].split(",")]
+    if "--arms" in sys.argv:
+        arms = sys.argv[sys.argv.index("--arms") + 1].split(",")
+    else:
+        arms = ARMS
+    ARMS = arms                       # report() prints what actually ran
     print("=" * 104)
-    print("PHASE 1 -- SEMANTIC STATE vs the SS70 parity wall (word vectors trained BY compression)")
+    print("SEMANTIC-STATE instrument (SS72-74 lineage)")
+    print(f"  data: {train_path} / {test_path}")
     print(f"  arms: {' | '.join(ARMS)}   sizes(KB): {sizes}")
-    print("  gate: copy/match OFF, 13-byte-decontaminated held-out wt103, deterministic mask")
+    print("  gate: copy/match OFF, 13-byte-decontaminated held-out, deterministic mask")
     print("=" * 104)
     t0 = time.time()
     if selftest:
-        results = [run_arm(a, sizes) for a in ARMS]
+        results = [run_arm(a, sizes, 0, train_path, test_path) for a in ARMS]
     else:
         with ProcessPoolExecutor(max_workers=len(ARMS)) as ex:
-            futs = [ex.submit(run_arm, a, sizes) for a in ARMS]
+            futs = [ex.submit(run_arm, a, sizes, 0, train_path, test_path) for a in ARMS]
             results = [f.result() for f in futs]
     secs = time.time() - t0
     for arm, rows, dt, _ in results:
