@@ -3193,6 +3193,47 @@ named the true one.
 
 ---
 
+## 76. Attacking the information-vs-readout gap — shared recency-discounted heads (`wstate.py` `proj` arms)
+
+§75 left a measured target: at slot depth 32 the state's raw information GREW (scrambled-floor
+separation +0.64 vs +0.17 at depth 6) while net value went negative — the linear mixer over 256
+raw dims drowns in variance. The §76 build: replace the per-(position, dim) weights with **H=4
+shared recency-discounted projections** — `feat_h = Σ_k γ^k (w_h · E[slot_k]) / Σ_k γ^k`,
+γ=0.85 — 9 parameters per head, depth-independent; exact per-bit credit to heads AND vectors.
+Arms: `proj` (learned), `projr` (frozen vectors — meaning control), `projscr` (noise — floor).
+Plus a real cross-file corpus: 10.4 MB of the Python standard library (596 files).
+
+**Results (same gate; WSLOTS=32 unless noted):**
+
+| run | proj − baseline | proj − projr (meaning) | proj − projscr (floor) |
+|---|---|---|---|
+| code 585 KB (S=32) | −0.0012…−0.0032 | +0.005…+0.008 | +0.012…+0.016 |
+| code 585 KB (**S=6**) | **+0.0012…+0.0014 (cross)** | +0.007…+0.010 | +0.014…+0.018 |
+| wt103 2.7 MB (S=32) | −0.002…−0.003 | +0.004…+0.007 | +0.012…+0.015 |
+| stdlib 0.4–3.4 MB (S=32) | +0.001 / −0.001 / −0.000 / −0.003 | +0.004…+0.007 | +0.014…+0.016 |
+
+**Findings, honestly:**
+- **The variance penalty is fixed**: raw S=32 sat −0.03 below baseline; proj@32 sits at parity
+  everywhere — depth now costs nothing. Real learned signal at every depth and corpus (meaning
+  and floor margins always positive).
+- **But 4 shared linear heads do not cash the depth**: proj@32 never crosses consistently
+  (stdlib crosses only at the smallest size). proj@6 crosses on code — the head form itself is
+  sound — but with ~1/10 the margins of the free 48-dim readout, and recency-averaging over 32
+  slots DILUTES the recent-window signal that carries the value (position 0's share ≈ 15%).
+- **The ladder is now measured**: free-48-dim@6 ≫ 4-head@6 > 4-head@32 ≈ raw@32. Net value
+  per unit of depth tracks readout capacity per unit of depth. Closing the gap needs a readout
+  whose capacity GROWS with depth non-linearly (content-selected/attentional reading of the
+  bound words — "which of my 32 bound entities does THIS context concern?") — the deep-learning
+  regime, now with a precise, budgeted target rather than a vague ambition.
+
+**Where this leaves the strain.** The instrument's discoveries stand (binding > superposition;
+code ≫ text ≫ DNA; the word-model-family absorber; the depth information gap). The next build
+that could matter in production is an attentional read of the deep slot memory — select by
+content, not by recency — developed instrument-first under the same gate, ported only on
+beats-strong.
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").

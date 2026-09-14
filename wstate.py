@@ -91,7 +91,12 @@ FNV0 = 0x811C9DC5
 MAXREC = 48                    # recent-word trace bank size (eligibility, evict-oldest)
 S = int(os.environ.get("WSLOTS", "6"))   # word slots (LRU depth; 6 = SS72; deep = beyond order-32 reach)
 SD = 8                         # slot vector dims
-SLOT_ARMS = ("slots", "slotsr", "slotsw", "semsim", "semfast", "matchslots", "scrambled")
+H = int(os.environ.get("WHEADS", "4"))  # SS76: shared recency-discounted projection heads
+GAMMA = float(os.environ.get("WGAMMA", "0.85"))
+GP = [GAMMA ** k for k in range(256)]   # precomputed recency discounts
+PROJ_ARMS = ("proj", "projr", "projscr")
+SLOT_ARMS = ("slots", "slotsr", "slotsw", "semsim", "semfast", "matchslots",
+             "proj", "projr", "projscr", "scrambled")
 LEARNED_SLOT_ARMS = ("slots", "slotsw", "semsim", "semfast", "matchslots")  # slot vectors trained by the loss
 SIM_ARMS = ("slotsw", "semsim")            # v5: +word expert (identity vs embedding bucket)
 XKEY_ARMS = ("slotsw", "semsim", "semfast")
@@ -125,16 +130,18 @@ def clean_mask_det(train, test, K=13):
 
 
 class Model:
-    def __init__(self, arm="baseline", lr=0.004, lr_rec=0.02, lr_emb=0.03, lr_s=0.02, seed=0):
+    def __init__(self, arm="baseline", lr=0.004, lr_rec=0.02, lr_emb=0.03, lr_s=0.02, lr_head=0.02, seed=0):
         self.arm = arm
         self.use_state = arm not in ("baseline", "matchbase")
         self.use_match = arm in MATCH_ARMS     # §75 reconciliation arms: copy ON in the instrument
-        self.lr, self.lr_rec, self.lr_emb, self.lr_s = lr, lr_rec, lr_emb, lr_s
+        self.lr, self.lr_rec, self.lr_emb, self.lr_s, self.lr_head = lr, lr_rec, lr_emb, lr_s, lr_head
         self.NM = len(ORDERS)
         self.NIN = self.NM + ((M + 1) if self.use_state else 0)     # +1 = bucket expert
         self.NIN = self.NIN + (1 if self.use_match else 0)          # match/copy vote
-        if arm in SLOT_ARMS:
+        if arm in SLOT_ARMS and arm not in PROJ_ARMS:
             self.NIN += S * SD                                     # word-slot features
+        if arm in PROJ_ARMS:
+            self.NIN += H                                          # SS76 projection-head features
         if arm in XKEY_ARMS:
             self.NIN += 1                                          # word-expert feature
         if arm in ("semsim", "semfast"):
@@ -156,6 +163,15 @@ class Model:
             self.mtab = {}
             self.hist = bytearray()
             self.mptr, self.mlen = -1, 0
+        if arm in PROJ_ARMS:                   # §76: shared recency-discounted heads
+            rng = random.Random(seed + 991)
+            self.hw = [[(rng.random() - 0.5) * 0.2 for _ in range(SD)] for _ in range(H)]
+            self.hgrad = [0.0] * H             # per-byte exact credit per head
+            self.hfeat = [0.0] * H             # cached features (serve the next byte)
+            self.hdw = [[0.0] * SD for _ in range(H)]   # d feat_h / d w_h  (cached)
+            self.hck = [0.0] * max(S, 1)       # d feat_h / d E[slot_k] coefficient per slot
+        if arm == "scrambled" or arm == "projscr":
+            self._sr = random.Random(1234)
         self.htail = 0; self.cur = 0; self.phase = 0
         self.sbase = self.NM
         self.wh = FNV0                 # rolling FNV-1a over lowercased word bytes
@@ -175,8 +191,6 @@ class Model:
             self.wcount = {}               # word id -> occurrences (diagnostics only)
             self.rec = {}                  # word id -> m-vector eligibility trace (learned arm)
             self.recorder = []             # insertion order for evict-oldest
-        if arm == "scrambled":
-            self._sr = random.Random(1234)
 
     def _octx(self, k):
         b = ORDERS[k]
@@ -251,7 +265,7 @@ class Model:
             n0, n1 = (c[0], c[1]) if c else (0, 0)
             sts[i] = stretch((n1 + 0.2) / (n0 + n1 + 0.4))
             i += 1
-        if self.arm in SLOT_ARMS:
+        if self.arm in SLOT_ARMS and self.arm not in PROJ_ARMS:
             if self.arm == "scrambled":
                 for j in range(S * SD):
                     sts[i] = self._sr.uniform(-1, 1); i += 1
@@ -263,6 +277,13 @@ class Model:
                             sts[i] = v[k]; i += 1
                     else:
                         i += SD
+        if self.arm in PROJ_ARMS:
+            if self.arm == "projscr":
+                for hh in range(H):
+                    sts[i] = self._sr.uniform(-1, 1); i += 1
+            else:
+                for hh in range(H):
+                    sts[i] = self.hfeat[hh]; i += 1
         if self.arm in XKEY_ARMS:
             c = self.xtab.get((self.xb << 10) | (self.phase << 7) | self.cur)
             n0, n1 = (c[0], c[1]) if c else (0, 0)
@@ -294,6 +315,12 @@ class Model:
             sb = self.sbase; w = self.w; g = p - y          # dL/dz, nats
             for j in range(M):
                 self.G[j] += g * w[sb + j]                  # accumulate dL/dh_j over the byte
+        if self.arm in ("proj", "projr"):
+            # §76: exact per-bit credit for the head features (mixer weight at predict time)
+            g = p - y
+            base = self.NM + M + 1; w = self.w
+            for hh in range(H):
+                self.hgrad[hh] += g * w[base + hh]
         if self.arm in LEARNED_SLOT_ARMS:
             # exact credit to slot-embedding dims: mixer weight at predict time, per bit
             g = p - y
@@ -340,6 +367,31 @@ class Model:
         wid = self._word_after(b)
         if self.arm in SUBWORD_ARMS and wid and wid not in self.tri_of:
             self.tri_of[wid] = tuple(self.wtri)     # stash the prefix's 3grams so far
+        # §76: apply the head/vector credit for the byte just SERVED (slots still pre-LRU)
+        if self.arm in ("proj", "projr") and learn:
+            if self.arm == "proj":
+                for k in range(S):
+                    ck = self.hck[k]
+                    if not ck:
+                        continue
+                    w_id = self.slots[k]
+                    v = self.semb.get(w_id)
+                    if not w_id or v is None:
+                        continue
+                    for dd in range(SD):
+                        acc = 0.0
+                        for hh in range(H):
+                            acc += self.hgrad[hh] * ck * self.hw[hh][dd]
+                        e = v[dd] - self.lr_s * acc
+                        v[dd] = 1.0 if e > 1.0 else (-1.0 if e < -1.0 else e)
+            for hh in range(H):
+                g = self.hgrad[hh]
+                if g:
+                    hdw = self.hdw[hh]
+                    wh = self.hw[hh]
+                    for dd in range(SD):
+                        wh[dd] -= self.lr_head * g * hdw[dd]
+            self.hgrad = [0.0] * H
         if self.arm in SLOT_ARMS and wid:
             sl = self.slots
             if wid in sl:
@@ -347,6 +399,35 @@ class Model:
             else:
                 del sl[-1]
             sl.insert(0, wid)
+        if self.arm in ("proj", "projr") and self.use_state:
+            # §76: refresh head features + exact-credit caches from the post-LRU slots
+            den = 0.0
+            for k in range(S):
+                if self.slots[k]:
+                    den += GP[k]
+            if den <= 0.0:
+                den = 1.0
+            for k in range(S):
+                self.hck[k] = (GP[k] / den) if self.slots[k] else 0.0
+            for hh in range(H):
+                wh = self.hw[hh]
+                num = 0.0
+                acc = [0.0] * SD
+                for k in range(S):
+                    w_id = self.slots[k]
+                    if not w_id:
+                        continue
+                    v = self.semb.get(w_id)
+                    if v is None:
+                        v = self._svec(w_id)
+                    c = GP[k]
+                    d = 0.0
+                    for dd in range(SD):
+                        d += wh[dd] * v[dd]
+                        acc[dd] += c * v[dd]
+                    num += c * d
+                self.hfeat[hh] = num / den
+                self.hdw[hh] = [a / den for a in acc]
         if self.arm in LEARNED_SLOT_ARMS and self.sgrad:
             for w_id, gr in self.sgrad.items():
                 v = self.semb.get(w_id)
@@ -617,6 +698,21 @@ def report(results, sizes, secs):
         sub_id = series(lambda B, kb: B["slotsw"][kb] - B["semfast"][kb])    # >0 subword+sem beats identity
         print(f"semfast vs semsim (subword init)   : {sub}")
         print(f"semfast vs slotsw (vs identity)    : {sub_id}")
+    if "proj" in present and "baseline" in present:
+        p_help = series(lambda B, kb: B["baseline"][kb] - B["proj"][kb])          # >0 deep readout crosses
+        print(f"proj   vs baseline (deep crossing)   : {p_help}")
+        if "projr" in present:
+            p_sem = series(lambda B, kb: B["projr"][kb] - B["proj"][kb])          # >0 MEANING
+            print(f"proj   vs projr (MEANING)           : {p_sem}")
+        if "projscr" in present:
+            p_noi = series(lambda B, kb: B["projscr"][kb] - B["proj"][kb])        # >0 real signal
+            print(f"proj   vs projscr (noise floor)     : {p_noi}")
+            if any(h > 0.001 for h in p_help) and all(n > 0.003 for n in p_noi):
+                print("  VERDICT (proj): CROSS -- the parameter-efficient deep readout crosses.")
+            elif all(n > 0.003 for n in p_noi):
+                print("  VERDICT (proj): signal present, no cross at these sizes.")
+            else:
+                print("  VERDICT (proj): NEGATIVE.")
     print(f"\n[{secs:.0f}s total]")
 
 
