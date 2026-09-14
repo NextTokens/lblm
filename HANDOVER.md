@@ -1,9 +1,8 @@
-# HANDOVER — the LBLM intelligence track, post-§76
+# HANDOVER — the LBLM intelligence track, post-§77
 
-**Scope of this document:** everything needed to continue the "new strain of models" effort after
-the 2026-09-13/14 sessions (ledger §72–§76, commits `7d1df61`…`37eeef7`, on top of the June
-§1–§71 arc). Written to be self-contained: read this + `learned_binary_address_machine.md` §69–76
-and you can continue without archaeology.
+**Scope of this document:** everything needed to continue after the 2026-09-14 session (ledger §77),
+which audited and corrected the §72–§76 arc. Read this + `learned_binary_address_machine.md` §77
+first. §72–§76 remain in the ledger as a record, but §77.5 lists which of their claims still stand.
 
 ---
 
@@ -11,173 +10,131 @@ and you can continue without archaeology.
 
 The project is an online, single-pass, bit-level predictive machine (compressor = intelligence
 substrate). Its production engine `blmrs-strong` is lpaq1-class (0.209 bits/bit enwik8; 0.217011
-on the 11 MB `corpus_big` A/B; 0.205801 at 30 MB enwik8). The intelligence track asks whether
-*learned memory channels* can beat plain statistics on leak-free held-out data. After §69–71
-every no-copy channel only tied the order-n models. This session **broke that wall** with
-**word-slot binding** (§72), mapped exactly where that signal lives (code ≫ text ≫ DNA, §75),
-identified why the production engine absorbs it (the word-model family, §75), and measured the
-readout-capacity ladder that governs exploiting *depth* (§76). The next concrete build is named
-at the end of this document.
+on the 11 MB `corpus_big` A/B; 0.127624 on the 10.6 MB Python stdlib; 0.205801 at 30 MB enwik8).
+The intelligence track asked whether *learned memory channels* can beat plain statistics on
+leak-free held-out data. §72–§76 reported that word-slot binding crossed that wall. **§77 found
+that the crossing was a learned current-word model created by an instrument bug (the slot memory
+held word prefixes), that the engine port had trained its vectors in the wrong direction, and that
+real word memory does not beat the orders baseline where it was measured correctly: whole-word slots
+lose on code and wt103 (seed 0) and add ~nothing in production, and recency heads and content
+attention fail a synthetic binding probe; soft similarity was never re-measured with correct keying.**
+The recommendation is to close the learned-memory model track (§5).
 
-## 2. What was done this session (verdicts, with numbers)
+## 2. What §77 found (numbers in ledger §77)
 
-### §72 — the breakthrough: word-slot binding crosses the parity wall (`wstate.py`, `BLMSLOTS` in `strong.rs`)
-
-- Probe-driven elimination: EMA-projection, exact trace-bank credit, and nonlinear bucket
-  readout all fail identically because the EMA **superposes ~5 words** — no readout of a
-  superposition can isolate one word's identity. Binding, not projection or credit, was the wall.
-- **Word slots**: an LRU of the last S=6 distinct words, each holding its own 8-dim vector fed
-  DIRECTLY as mixer features. Credit is exact by construction (a slot persists ~6 words; every
-  bit while resident gradients its word's vector). No RTRL needed.
-- Gate result (copy OFF, 13-byte-decontaminated wt103, deterministic mask, scrambled floor):
-  slots cross BELOW the orders-only baseline at ≥1.2 MB, margin growing with data
-  (−0.0031 → +0.0027); **replicated seeds 0/1/2** (+0.0015…+0.0031 vs baseline everywhere).
-- Attribution: slots beat the frozen-vector control (`slotsr`) by +0.011…+0.014 at every
-  seed×size, and `slotsr` never crosses → **the win is the vectors the compression loss
-  teaches** (meaning beyond lexical identity).
-- Rust port (`BLMSLOTS=1`, default OFF = bit-identical): **no gain at 11 MB** (+0.0001).
-  This established the **port rule**: a channel earns its engine place only by beating
-  strong's own baseline (0.217011 @11 MB `corpus_big`, obits 25), never the orders-only rail.
-
-### §73 — hard similarity keying honestly fails
-
-- `semsim` (count expert keyed by embedding-bucket = 8 sign bits + coherence dots) vs `slotsw`
-  (identity-keyed expert control): at scale `semsim` never crosses and hurts bare slots by
-  0.004–0.006; `slotsw` shows the §71 pattern (best at 150–450 KB, drag at 2.7 MB).
-- Zero-shot probe: fastText-style subword-composed init (`semfast`) lands an unseen word in its
-  family's direction, yet sign buckets still misroute — **hard quantisation destroys the graded
-  information similarity carries**. Requirement established: similarity needs a SOFT readout.
-
-### §74 — soft retrieval built in the engine, measured inert
-
-- `strong.rs BLSOFT=1`: LSH over the §72 vectors (sign bucket + 8 one-bit-flip probes) → top-k
-  neighbours of the last word by normalised dot → **similarity-weighted votes of the
-  neighbours' own word-model counts** → one trained mixer head. Default bit-identical.
-- 11 MB A/B: all configs +0.00009…+0.00015 vs 0.217011. Cause: single-pass tail vectors are
-  too under-trained for informative neighbourhoods.
-
-### §75 — the frontier sweep: where the signal lives, and the absorber identified
-
-- **Scale (enwik8 30 MB production):** baseline 0.205801; slots +0.00009; soft +0.00009.
-  Production verdict unchanged at 2.7× data.
-- **Code is the channel's home turf:** slots cross at EVERY size from 100 KB
-  (+0.0074…+0.0122, 3–4× text margins), meaning margin +0.017…+0.020.
-- **DNA is an honest negative** (6-mer-tokenised E. coli): slots −0.02 vs baseline; learned
-  worse than frozen. k-mer "words" have no selectional structure; codon/revcomp specialists
-  (§55) remain the right DNA tools.
-- **Absorber hunt (3 hypotheses, 2 killed):** depth fails everywhere (S=32/64 worse in both
-  engines — but the S=32 scrambled-floor separation GREW to +0.64 vs +0.17: information exists
-  at depth, the linear readout can't extract it); copy is NOT the absorber (match-ON instrument
-  arms `matchbase`/`matchslots`: slots still beat orders+match, +0.002 wt103 / +0.006…+0.013
-  code); **the word-model family IS** (identity word-expert on top of slots adds
-  +0.028…+0.037 on code — same window, more signal — and strong has word + prev-word +
-  hashed orders 8–32).
-
-### §76 — attacking the depth gap with shared recency-discounted heads (`proj` arms)
-
-- `feat_h = Σ_k γ^k (w_h · E[slot_k]) / Σ_k γ^k`, H=4 heads, γ=0.85 — 9 parameters per head,
-  depth-independent; exact credit to heads and vectors. New corpus: **10.4 MB Python stdlib**
-  (596 files, real cross-file code).
-- **Variance penalty fixed** (raw S=32 was −0.03 below baseline; proj@32 at parity everywhere;
-  meaning +0.004…+0.010, floor +0.012…+0.018 at every depth/corpus). **But 4 linear heads
-  don't cash the depth**: proj@32 never crosses consistently; proj@6 crosses on code
-  (+0.0012…+0.0014, ~1/10 the free-readout margin) — recency-averaging dilutes the recent
-  window.
-- **The measured ladder:** free-48-dim@6 ≫ 4head@6 > 4head@32 ≈ raw@32.
-  *Value per unit of depth tracks readout capacity per unit of depth.*
+1. **Instrument defect.** `wstate.py` put the growing prefix id into the slot LRU at every letter
+   byte. Six slots held about two words (`cat, ca, c, quick, quic, qui`); 32 slots held about 7.5.
+   New env `WSLOTMODE=word` stores completed words only; the default `prefix` stays bit-identical to
+   §72–§76 so old numbers reproduce.
+2. **Engine defect.** `strong.rs` applied the slot-vector credit with the wrong sign (gradient
+   ascent) since §72. Fixed; the default engine is bit-identical (0.231704 @ 300 KB `corpus.txt`).
+   `BLSOFT` also votes the wrong statistic (the statistic of the delimiter after a similar word,
+   applied to the next word's letters); documented, not fixed.
+3. **What the §72 win was.** One slot holding the current prefix beats the orders baseline by
+   +0.015…+0.020 bpb on code and +0.007…+0.015 on wt103 (seed 0), more than the §72 six-slot arm.
+   Frozen vectors in that slot lose. It is a learned word model; production has a count word model, but
+   the two were never compared.
+4. **Real word memory loses.** Whole-word slots, at 6 and 32 slots, are worse than the orders
+   baseline at every size on code and wt103 (seed 0), and the loss grows with data on wt103. Learned
+   vectors are mostly worse than frozen ones.
+5. **Production, sign fixed.** Whole-word slots add nothing on text (−0.000005 bits/bit) and +0.00004
+   on code, with or without the word models (`BLSTRIPW`) and high orders (`BLSTRIPH`). Removing the word
+   models reveals no hidden whole-word slot gain; the §72 channel (a learned prefix vector) was never
+   tested in production.
+6. **The "information at depth" was an artifact.** Scrambled arms lose ≈0.002 bpb per noise
+   dimension; the growing "floor separation" measured that, not information.
+7. **The attentional read fails its pre-registered probe.** On a synthetic cue→outcome stream, no
+   content-attention arm (default settings) retrieves a cue 2, 12 or 24 words back, although the cue
+   is in memory 100 % of the time. Kill rule fired; no corpus grid was run. The pre-registered sanity
+   check (P1) also failed; the evidence that the probe can register binding (a recency vote recovers
+   ~70 % of the information when the cue is recent) is post hoc. Red-team measurement (3 cells, one
+   seed each): when the cue is in the vote set its entry is right on 84–94 % of informative bits, but
+   the mixer weight on the vote is negative, so correct votes hurt; that training then pushes attention
+   away from them is inferred from the sign, not traced.
 
 ## 3. The instruments — what exists and how to run it
 
 | Tool | Command | Notes |
 |---|---|---|
-| The instrument | `python wstate.py --train T --test E --sizes a,b,c --arms A1,A2,…` | parallel over arms (24 cores). Default data = wt103; `--selftest` for a 40 KB sanity pass |
-| Slot depth / heads | env `WSLOTS` (default 6), `WHEADS` (4), `WGAMMA` (0.85) | read at import time |
-| Arms available | `baseline bitsonly randemb learned slotsr slots slotsw semsim semfast matchbase matchslots proj projr projscr scrambled` | see `wstate.py` docstring for the attribution ladder each controls |
-| Production engine | `./blmrs/target/release/strong.exe <path> <cap> <obits>` | knobs: `BLMSLOTS`, `BLSOFT`, `NSLOTS` (≤64), `SBITS`, `LR_S`, `ALRS`, `SOFTK`, `SIMMIN`; all default OFF = bit-identical |
-| The gate protocol | copy/match OFF · 13-gram decontamination (`clean_mask_det`, deterministic FNV — genmem's `clean_mask` is process-salted, do NOT use across processes) · frozen-vector control · scrambled noise floor | comparisons valid WITHIN a size only (test slice grows with train) |
-| Scratch probes | `_assoc_check.py` (delayed word→outcome binding), `_simprobe.py` (tail + zero-shot families), `_replicate.py` (seed replication) | gitignored; keep using this probe-first pattern |
+| The instrument | `python wstate.py --train T --test E --sizes a,b,c --arms A1,A2,… [--seed N]` | one process per arm; `--selftest` runs arms sequentially |
+| Slot memory mode | env `WSLOTMODE=prefix` (default, legacy) or `word` | **use `word` for any claim about word memory** |
+| Slot depth / heads | env `WSLOTS` (6), `WHEADS` (4), `WGAMMA` (0.85) | read at import time |
+| Attention knobs | env `WTOPM` (4), `WVORD` (3), `WVBITS` (22), `WKAPPA` (8.0, `attncos`) | read at import time |
+| Arms | `baseline bitsonly randemb learned slotsr slots slotsw semsim semfast matchbase matchslots proj projr projscr scrambled attn attnr attnrec attnscr attncos` | docstring has the control ladder for each family |
+| Binding probe | `python _bind_probe.py --smoke` / `--grid` | gitignored scratch; pre-registered criteria in its docstring; writes `_77p_probe.txt` |
+| Production engine | `./blmrs/target/release/strong.exe <path> <cap> <obits>` | cap 0 = full file. Knobs: `BLMSLOTS`, `BLSOFT` (mis-keyed), `NSLOTS` (≤64), `SBITS`, `LR_S`, `ALRS`, `SOFTK`, `SIMMIN`, `BLSTRIPW`, `BLSTRIPH`; all default OFF = bit-identical |
+| Gate protocol | copy/match OFF · 13-gram decontamination (`clean_mask_det`) · frozen-vector control · scrambled floor | comparisons valid only within a size; the scrambled floor measures noise-dim penalty, so size it to the arm |
 
-**Data on disk:** wt103 train/test (2.8 MB/1 MB), `corpus_big.txt` (11 MB, the production A/B),
-enwik8 (100 MB, downloaded this session), `stdlib_train/test.txt` (7.8/2.6 MB, NEW cross-file
-code), `code_train/test.txt` (585/195 KB), `dna_train/test.txt` (E. coli, 6-mer `.`-separated),
-plus the June corpora and genomes.
+**Data on disk:** wt103 train/test (2.8 MB/1 MB), `corpus_big.txt` (11 MB), enwik8 (100 MB),
+`stdlib_train/test.txt` (8.0/2.7 MB) and `stdlib.bin` (10.6 MB), `code_train/test.txt`
+(585/195 KB), `dna_train/test.txt`, plus the June corpora and genomes.
 
-**Timings (this machine):** instrument ≈ 0.04–0.06 Mbit/s per arm (a 5.6 MB arm ≈ 60–90 min);
-`strong.exe` ≈ 0.1–0.2 Mbit/s (11 MB ≈ 12–18 min; 30 MB ≈ 30–50 min). Full multi-arm runs are
-parallel; launch them in background and poll the output files.
+**Timings (this machine):** instrument baseline ≈ 6–10 KB/s; slot arms ≈ 0.7–2.2 KB/s (a 32-slot wt103
+arm over all four sizes took ≈ 2.2 h with other jobs running).
+`strong.exe` full engine on 11 MB ≈ 9–11 min; stripped variants 5–10 min.
 
-## 4. Established laws — do not re-litigate
+## 4. Established laws — corrected after §77
 
-1. **Superposition cannot bind.** Any state that averages ~5 words is unreadable per-word, by
-   any readout. Bind identity in slots.
-2. **The slot channel's signal is real, replicated, copy-independent, and strongest on code** —
-   but it lives in the ~6-word window that word-keyed statistics already harvest. Any engine
-   with a decent word-model family absorbs it (that family is THE absorber — not match, not range).
-3. **Depth holds information but linear recency readouts can't extract it** (the §76 ladder).
-4. **Hard quantisation of similarity destroys its value**; similarity must be read softly.
-5. **Domains rank: code ≫ text ≫ DNA** for word-binding signal; DNA needs its specialists.
-6. **Process laws:** probe at byte-scale before trusting an hour-long run; replicate across
-   seeds before writing a verdict; ports only on beats-strong; negatives go in the ledger.
+1. **No learned memory channel measured on leak-free held-out data beats order-n plus word
+   statistics** (§70 EMA state; §72–§77 whole-word slots at ≤2.7 MB, seed 0). §71's hand-built
+   counters reached parity at scale. Not covered: soft similarity (never measured with correct keying),
+   §76 heads and §77 attention in word mode (synthetic probe only), and the §72 learned prefix vector
+   against a count word model (never run). The match model gave +0.011…+0.014 in §69–§71 but was worse
+   than no match in the §75 instrument arms under the same decontaminated gate, so even the
+   memorisation gain is unsettled.
+2. **A 32-unit EMA superposition did not bind a 2-word cue with a linear or bucketed readout** (§72
+   v1–v3; not re-tested after §77, and the prefix-slot "pass" it was contrasted with was not cue
+   binding). Binding identity in whole-word slots does not help either: they lose on code and text.
+3. **A learned per-word vector is a word model.** Any "win" by a channel whose slot 0 is the
+   current word must be compared against a word model, not an orders-only baseline.
+4. **Noise floors scale with dimension.** Separation from a scrambled arm is not evidence of
+   information unless the floor has the same dimension count.
+5. **Process laws (reinforced):** check that the mechanism does what the text says (print what the
+   memory holds); port the exact mechanism that won; test gradient signs with a toy before an A/B;
+   replicate across seeds before a verdict; pre-register kill rules; negatives go in the ledger.
 
-## 5. The way forward — the next build, concretely
+## 5. The way forward
 
-**Primary: an attentional read of the deep slot memory.** The problem is now precisely
-"select WHICH bound word matters for THIS context," not "remember more." Design sketch,
-reusing everything that exists:
+**Recommendation: close the learned-memory model track.** The arc's own kill rule fired, and every
+§72–§76 positive that was decomposed traced to a bug or a word model.
 
-- Candidates: the S=32 bound slots (always trained by residency credit — unlike §74's LSH
-  neighbours, no cold-start).
-- Query: a learned projection of the current context (start: `E[current word]` or the existing
-  EMA state; a tiny learned query vector is the §76 head minus the fixed recency discount).
-- Scores: `s_k = dot(query, E[slot_k]) / τ`; selection: softmax (soft) — **this is §74's
-  similarity-weighted word-model vote with the candidate set = slots instead of LSH neighbours,
-  and content-based instead of recency-based weighting.**
-- Vote: each selected word's own word-model counts (exists in both engines), one mixer input.
-- Acceptance: instrument CROSS vs baseline with meaning-vs-frozen and noise-floor controls on
-  code + stdlib at S=32 (where §76 stopped winning); then the port rule vs 0.217011 (11 MB
-  `corpus_big`) AND the stdlib corpus at 10 MB.
-- Expected failure mode to watch: query cold-start for rare current words — the `semfast`
-  subword-composed init already exists to mitigate it.
+If model work continues anyway, two narrow loose ends have measured targets:
+- **Forced-selection oracle for the vote-readout trap (§77.4).** Force the cue into the vote set
+  during training and test, log the vote mixer weight. If the weight turns positive and the gain
+  appears at G=12/24, the vote readout works once selection is given and selection is the remaining
+  problem; if not, the vote readout itself fails at long gaps. Needs a new arm in `wstate.py`; the
+  whole 58-job probe grid took about 32 min at 4 jobs in parallel.
+- **The §72 learned prefix vector against a count word model** on the same gate. It settles whether
+  that channel is anything more than a word model. Low prior.
 
-**Secondary paths, in order:**
-1. **Slots for engines WITHOUT a word-model family.** The absorber is strong's word models; a
-   minimal/embedded engine variant (or the DNA engine with domain-appropriate tokens) lacks
-   them — slots may pay immediately there. Cheap to test: strip word/prev-word/high orders from
-   a strong variant and A/B slots on `corpus_big`/stdlib.
-2. **Genuinely long-range domains** (the stdlib corpus is in place; add cross-referential
-   corpora: legal/technical documents, configuration graphs).
-3. **Scale beyond CPU** when a channel finally clears beats-strong: the layout is already
-   GPU-shaped (flat tables, dense mixer); the serial wall is broken by batching independent
-   streams in lockstep (see the §39/README notes).
-4. **Unchanged side assets:** `honestmap.py` structure triage remains productizable now;
-   `separation.py` engine/knowledge separation remains the strain's distinctive guarantee.
+Assets that stand independently of the model track:
+- **The production engine** (lpaq1-class, bit-identical defaults, full ablation flags).
+- **`honestmap.py` structure triage** and **`separation.py` engine/knowledge separation**.
+- **The byte-stream surprise signal**: the engine's per-bit cost is a training-free novelty score
+  over opaque streams, the use case earlier assessments found most practical.
 
 ## 6. Practical gotchas (learned the hard way)
 
-- **Windows file lock:** `cargo build` silently produces "failed to remove strong.exe" while a
-  run is live, and the OLD binary then answers your "new" A/B (it bit us once — the tell is
-  identical numbers across configs). Kill all `strong.exe` before rebuilding; re-verify the
-  default bit-identity (0.231704 @300 KB `corpus.txt`) after every rebuild.
-- **`.gitignore` whitelist:** new top-level deliverable `.py` files must be added to the
-  whitelist or they vanish from `git status`. `_*.py`, `probe_*.py`, `*.txt`, `data/` are
-  deliberately ignored (scratch).
-- **Mask determinism:** `genmem.clean_mask` uses salted `hash()` — fine within one process,
-  wrong across processes. `wstate.clean_mask_det` is the deterministic replacement.
-- **Conventions:** §-numbered commits; every ledger section carries its controls and negatives;
-  a crossing without seed replication is not a verdict; a production claim needs the paired
-  same-binary baseline.
-- **Rust toolchain:** `/c/Users/aali_/.cargo/bin/cargo` (not on PATH in Git Bash);
-  `cd blmrs && cargo build --release --bin strong`.
+- **Print what the memory holds.** The prefix bug survived five sections because nobody dumped the
+  slot contents. A short script that printed them found it.
+- **Windows file lock:** `cargo build` silently leaves the old `strong.exe` in place while a run is
+  live. Kill all `strong.exe` before rebuilding; re-verify 0.231704 @ 300 KB `corpus.txt` (obits 23).
+- **Run long experiments from a frozen copy** of `wstate.py` + `genmem.py` (Windows process pools
+  re-import from disk); this session used snapshots in the scratchpad.
+- **`.gitignore` whitelist:** new top-level deliverable `.py` files must be whitelisted.
+  `_*.py`, `probe_*.py`, `*.txt`, `data/` are deliberately ignored (scratch).
+- **Mask determinism:** use `wstate.clean_mask_det`, not `genmem.clean_mask`, across processes.
+- **Rust toolchain:** `/c/Users/aali_/.cargo/bin/cargo`; `cd blmrs && cargo build --release --bin strong`.
 
-## 7. Commits and ledger map for this session
+## 7. Commits and ledger map
 
 | § | Commit | One line |
 |---|---|---|
-| 72 | `7d1df61` | the parity wall falls on the instrument; port honest negative |
-| — | `073be07` | ledger §72 + README |
-| 73 | `6a6414b`, `4f38f91` | hard similarity fails; subword init; baseline-arm crash fix |
-| 74 | `ac9b603` | soft retrieval in strong.rs, measured inert |
-| 75 | `7c06e8b` | frontier sweep: enwik8 30 MB, code home turf, DNA negative, absorber |
-| 76 | `37eeef7` | shared recency-discounted heads; the readout-capacity ladder |
+| 72 | `7d1df61`, `073be07` | word-slot "crossing" (§77: a learned word model via the prefix bug); port ran uphill vectors |
+| 73 | `6a6414b`, `4f38f91` | hard similarity fails (§77: bucketed per-prefix predictors) |
+| 74 | `ac9b603` | soft retrieval inert (§77: sign bug + mis-keyed vote) |
+| 75 | `7c06e8b` | frontier sweep (§77: absorber and depth claims fall) |
+| 76 | `37eeef7` | recency heads (§77: the depth target was a noise artifact) |
+| 77 | uncommitted | audit: two defects fixed, re-gate, strip grid, attention probe kill |
 
-Ledger: `learned_binary_address_machine.md` §69–§76. README row for `wstate.py` is current.
+Ledger: `learned_binary_address_machine.md` §69–§77.

@@ -38,6 +38,10 @@ to the embedding). Arms:
   slots vs bitsonly = the slot channel's effect; slots vs slotsr = MEANING vs identity.
   RESULT (§72): slots CROSS below the orders baseline at >=1.2MB, margin growing with data,
   replicated across seeds; slotsr never crosses -> the win is the learned vectors.
+  CORRECTED (SS77): in that run the LRU held word PREFIXES (see WSLOTMODE below), so slot 0 was the
+  current prefix and the crossing is a learned current-word model: one prefix slot (WSLOTS=1) beats
+  S=6, and real whole-word slots (WSLOTMODE=word) lose to the orders baseline at every size measured
+  (seed 0; ledger SS77.2).
 
 v5 (Phase 2, similarity): the strong.rs port showed identity slots add NOTHING to an
 lpaq-class engine (hashed order-8..32 already span 1-5 words) -- the open lever is
@@ -49,6 +53,32 @@ readout of the CURRENT word (prefix id, like the word model):
              across the word tail)  + S coherence features dot(E[cur], E[slot_i])
   semsim < slotsw (same capacity, same placement) => SIMILARITY beats IDENTITY keying --
   the Phase-2 thesis. semsim < slots => the similarity layer adds margin on its own.
+  CORRECTED (SS77): under WSLOTMODE=prefix slots[0] is the current prefix at word-interior bytes, so slotsw
+  is a word model and semsim buckets per-prefix predictor vectors; this could not measure similarity.
+
+v7 (SS77, ATTENTIONAL READ): SS75/76 read the deep slots as HOLDING information a fixed recency readout
+cannot use (SS77: that was a noise-dimension artifact). The pre-registered test reads the LRU with CONTENT-based
+attention, served once per byte (forward at byte end, after the LRU update):
+    c = E[slot0] (last completed word under WSLOTMODE=word);  q = Wq c + bq;  e_k = q.E_k + beta_k;  a = softmax(e)
+    pooled r = sum_k a_k E_k  (SD features);  T = top-m slots by a (WTOPM=4)
+    vote v = sum_{k in T} (a_k/A_T) stretch(P_vote[hash(word_k, order-WVORD ctx, phase, partial)])
+  credit is EXACT for parameters frozen within the byte (per-bit dL/dr and dL/da accumulated with
+  the predict-time mixer weights, backprop through the softmax applied at byte end). Arms:
+    attn    : learned vectors + learned query + learned position bias       (THE HEADLINE)
+    attnr   : vectors FROZEN, query/bias learn                              -> MEANING control
+    attnrec : learned vectors, a_k = recency weights GP[k] (SS76), T = m most recent
+                                                                            -> SELECTION control
+    attnscr : the SD+1 attention features replaced by noise                 -> floor
+    attncos : = attn, but COSINE content score at a fixed scale (SS77c; WKAPPA, default 8.0):
+              e_k = KAPPA (q.E_k) / (|q||E_k| + 1e-8) + beta_k  -- content logits O(KAPPA) whatever the
+              vector norms (attn's q.E_k spread is ~0.002 at init norms ~0.08, so attn ran near-uniform and
+              position-driven). Exact backward through the normalisation for q and every E_k.
+  SS77 finding (instrument bug): the slot LRU was updated at EVERY letter byte with the growing
+  PREFIX id, so S=6 held ~2 words ('cat','ca','c','quick','quic','qui') and S=32 ~6-8 words;
+  strong.rs BLMSLOTS inserts only COMPLETED words. WSLOTMODE=prefix (default, SS72-76 bit-identical)
+  | word (completed words only -- the intended mode for the attn arms, with WSLOTS=32).
+  SS77 RESULT: the long-gap probe (_bind_probe.py) killed the attention arms -- no content arm binds a
+  cue at any gap; the vote's mixer weight settles negative, so correct votes hurt (ledger SS77.4).
 
 Words: maximal [A-Za-z0-9] runs, lowercased, FNV-1a rolling hash -> id (prefix-visible, like
 the core's word model). id 0 (no active word) -> zero embedding. The EMA of word embeddings is
@@ -77,6 +107,7 @@ Run:  python wstate.py                (5 arms x sizes [150,450,1200,2700] KB, ar
       python wstate.py --selftest     (tiny sequential sanity run)
 """
 import sys, math, random, time, os
+from array import array
 from concurrent.futures import ProcessPoolExecutor
 
 from genmem import stretch, squash
@@ -93,10 +124,23 @@ S = int(os.environ.get("WSLOTS", "6"))   # word slots (LRU depth; 6 = SS72; deep
 SD = 8                         # slot vector dims
 H = int(os.environ.get("WHEADS", "4"))  # SS76: shared recency-discounted projection heads
 GAMMA = float(os.environ.get("WGAMMA", "0.85"))
+# SS77: WHAT the slot LRU binds. "prefix" (default, the SS72-76 behaviour, kept bit-identical) inserts
+# the growing PREFIX id at EVERY letter byte -- so S=6 holds ~2 words ('cat','ca','c','quick','quic',
+# 'qui') and S=32 ~6-8 words. "word" inserts only COMPLETED words (on the byte that ends a word),
+# matching strong.rs BLMSLOTS -- so S slots really are the last S distinct words.
+SLOTMODE = os.environ.get("WSLOTMODE", "prefix")
+assert SLOTMODE in ("prefix", "word"), SLOTMODE
 GP = [GAMMA ** k for k in range(256)]   # precomputed recency discounts
 PROJ_ARMS = ("proj", "projr", "projscr")
+ATTN_ARMS = ("attn", "attnr", "attnrec", "attnscr", "attncos")   # SS77: attentional read over the slot LRU
+ATTN_READ_ARMS = ("attn", "attnr", "attnrec", "attncos")         # the non-floor attention arms
+KAPPA = float(os.environ.get("WKAPPA", "8.0"))           # SS77c: attncos fixed cosine scale
+TOPM = int(os.environ.get("WTOPM", "4"))                 # SS77: vote over the top-m attended slots
+VORD = int(os.environ.get("WVORD", "3"))                 # SS77: vote context order (bytes)
+VBITS = int(os.environ.get("WVBITS", "22"))              # SS77: vote table = 2 * 2^VBITS counts
+M64 = (1 << 64) - 1
 SLOT_ARMS = ("slots", "slotsr", "slotsw", "semsim", "semfast", "matchslots",
-             "proj", "projr", "projscr", "scrambled")
+             "proj", "projr", "projscr", "scrambled") + ATTN_ARMS
 LEARNED_SLOT_ARMS = ("slots", "slotsw", "semsim", "semfast", "matchslots")  # slot vectors trained by the loss
 SIM_ARMS = ("slotsw", "semsim")            # v5: +word expert (identity vs embedding bucket)
 XKEY_ARMS = ("slotsw", "semsim", "semfast")
@@ -138,10 +182,12 @@ class Model:
         self.NM = len(ORDERS)
         self.NIN = self.NM + ((M + 1) if self.use_state else 0)     # +1 = bucket expert
         self.NIN = self.NIN + (1 if self.use_match else 0)          # match/copy vote
-        if arm in SLOT_ARMS and arm not in PROJ_ARMS:
+        if arm in SLOT_ARMS and arm not in PROJ_ARMS and arm not in ATTN_ARMS:
             self.NIN += S * SD                                     # word-slot features
         if arm in PROJ_ARMS:
             self.NIN += H                                          # SS76 projection-head features
+        if arm in ATTN_ARMS:
+            self.NIN += SD + 1                                     # SS77 pooled features + vote
         if arm in XKEY_ARMS:
             self.NIN += 1                                          # word-expert feature
         if arm in ("semsim", "semfast"):
@@ -170,8 +216,24 @@ class Model:
             self.hfeat = [0.0] * H             # cached features (serve the next byte)
             self.hdw = [[0.0] * SD for _ in range(H)]   # d feat_h / d w_h  (cached)
             self.hck = [0.0] * max(S, 1)       # d feat_h / d E[slot_k] coefficient per slot
-        if arm == "scrambled" or arm == "projscr":
+        if arm == "scrambled" or arm == "projscr" or arm == "attnscr":
             self._sr = random.Random(1234)
+        if arm in ATTN_READ_ARMS:                   # SS77 attentional read
+            if arm != "attnrec":
+                rng = random.Random(seed + 1777)
+                self.Wq = [[(1.0 if i == j else 0.0) + rng.uniform(-0.05, 0.05) for j in range(SD)]
+                           for i in range(SD)]
+                self.bq = [0.0] * SD
+                self.beta = [0.0] * S
+            self.vtab = array("H", [0]) * (2 << VBITS)   # flat (n0, n1) vote counts
+            self.at_n = 0                          # non-empty slots served (0 = features/vote off)
+            self.at_ks = []; self.at_E = []; self.at_a = []; self.at_T = []; self.at_wT = []
+            self.at_AT = 1.0; self.at_c = None; self.at_q = None
+            self.at_cos = None                     # attncos backward cache (|q|, |E_k|, q.E_k, den_k)
+            self.at_r = [0.0] * SD; self.at_hb = []
+            self.aGr = [0.0] * SD                  # per-byte dL/dr
+            self.aGa = []                          # per-byte dL/da_k (vote path), aligned with at_T
+            self.vt_idx = []; self.vt_s = []; self.vt_v = 0.0   # per-bit vote cache (predict time)
         self.htail = 0; self.cur = 0; self.phase = 0
         self.sbase = self.NM
         self.wh = FNV0                 # rolling FNV-1a over lowercased word bytes
@@ -180,6 +242,8 @@ class Model:
         self.tri_of = {}               # v6: word id -> its 3gram ids (for init + credit share)
         self.wtri = []                 # v6: rolling 3grams of the current word
         self.wtail2 = (0, 0)           # v6: last two letter bytes (for 3gram ids)
+        self.inw = False               # SS77: inside a word run
+        self.done = 0                  # SS77: id of the word COMPLETED by the byte just seen (else 0)
         if self.use_state:
             self.a = [AMIN + (AMAX - AMIN) * (j / (M - 1)) for j in range(M)]
             rng = random.Random(seed)
@@ -206,9 +270,12 @@ class Model:
             if b1:                                   # a full 3gram is available
                 self.wtri.append((b1 << 16) | (b2 << 8) | c)
             self.wtail2 = (b2, c)
+            self.inw = True; self.done = 0
             return self.wh | (1 << 31)     # never 0
         if self.wh and self.arm in SUBWORD_ARMS:   # v6: a word just completed — stash its 3grams
             self.tri_of.setdefault(self.wh | (1 << 31), tuple(self.wtri))
+        self.done = (self.wh | (1 << 31)) if self.inw else 0
+        self.inw = False
         self.wh = FNV0
         self.wtri = []
         self.wtail2 = (0, 0)
@@ -265,7 +332,7 @@ class Model:
             n0, n1 = (c[0], c[1]) if c else (0, 0)
             sts[i] = stretch((n1 + 0.2) / (n0 + n1 + 0.4))
             i += 1
-        if self.arm in SLOT_ARMS and self.arm not in PROJ_ARMS:
+        if self.arm in SLOT_ARMS and self.arm not in PROJ_ARMS and self.arm not in ATTN_ARMS:
             if self.arm == "scrambled":
                 for j in range(S * SD):
                     sts[i] = self._sr.uniform(-1, 1); i += 1
@@ -284,6 +351,28 @@ class Model:
             else:
                 for hh in range(H):
                     sts[i] = self.hfeat[hh]; i += 1
+        if self.arm in ATTN_ARMS:
+            if self.arm == "attnscr":
+                for j in range(SD + 1):
+                    sts[i] = self._sr.uniform(-1, 1); i += 1
+            elif self.at_n:
+                r = self.at_r
+                for j in range(SD):
+                    sts[i] = r[j]; i += 1
+                key2 = (self.phase << 8) | self.cur
+                vt = self.vtab; vmask = (1 << VBITS) - 1
+                idxs = []; ss = []; v = 0.0; wT = self.at_wT
+                for t, hb in enumerate(self.at_hb):
+                    hx = ((hb ^ key2) * 0x94D049BB133111EB) & M64
+                    ix = (hx ^ (hx >> 29)) & vmask
+                    n0 = vt[2 * ix]; n1 = vt[2 * ix + 1]
+                    s = stretch((n1 + 0.2) / (n0 + n1 + 0.4))
+                    idxs.append(ix); ss.append(s)
+                    v += wT[t] * s
+                self.vt_idx = idxs; self.vt_s = ss; self.vt_v = v
+                sts[i] = v; i += 1
+            else:
+                i += SD + 1
         if self.arm in XKEY_ARMS:
             c = self.xtab.get((self.xb << 10) | (self.phase << 7) | self.cur)
             n0, n1 = (c[0], c[1]) if c else (0, 0)
@@ -321,6 +410,17 @@ class Model:
             base = self.NM + M + 1; w = self.w
             for hh in range(H):
                 self.hgrad[hh] += g * w[base + hh]
+        if self.arm in ATTN_READ_ARMS and self.at_n:
+            # SS77: exact per-bit credit (mixer weights at predict time) to r and, via the vote, to a
+            g = p - y
+            base = self.NM + M + 1; w = self.w; Gr = self.aGr
+            for j in range(SD):
+                Gr[j] += g * w[base + j]
+            if self.arm != "attnrec":
+                gv = g * w[base + SD] / self.at_AT
+                v = self.vt_v; ss = self.vt_s; Ga = self.aGa
+                for t in range(len(ss)):
+                    Ga[t] += gv * (ss[t] - v)
         if self.arm in LEARNED_SLOT_ARMS:
             # exact credit to slot-embedding dims: mixer weight at predict time, per bit
             g = p - y
@@ -357,6 +457,17 @@ class Model:
                 if c is None:
                     c = [0, 0]; self.xtab[key] = c
                 c[y] += 1
+            if self.arm in ATTN_READ_ARMS and self.at_n:
+                vt = self.vtab
+                for ix in self.vt_idx:
+                    j0 = 2 * ix; jy = j0 + y
+                    cy = vt[jy] + 1
+                    if cy >= 255:
+                        vt[jy] = (cy + 1) >> 1
+                        jo = j0 + 1 - y
+                        vt[jo] = (vt[jo] + 1) >> 1
+                    else:
+                        vt[jy] = cy
         self.cur = (self.cur << 1) | y; self.phase += 1
         if self.phase == 8:
             self._byte_end(learn)
@@ -392,13 +503,20 @@ class Model:
                     for dd in range(SD):
                         wh[dd] -= self.lr_head * g * hdw[dd]
             self.hgrad = [0.0] * H
-        if self.arm in SLOT_ARMS and wid:
+        if self.arm in ATTN_READ_ARMS:
+            # SS77: apply the attention credit for the byte just SERVED (slots still pre-LRU)
+            if learn and self.at_n:
+                self._attn_apply(self._attn_grads())
+            self.aGr = [0.0] * SD
+            self.aGa = [0.0] * len(self.at_T)
+        swid = wid if SLOTMODE == "prefix" else self.done
+        if self.arm in SLOT_ARMS and swid:
             sl = self.slots
-            if wid in sl:
-                sl.remove(wid)
+            if swid in sl:
+                sl.remove(swid)
             else:
                 del sl[-1]
-            sl.insert(0, wid)
+            sl.insert(0, swid)
         if self.arm in ("proj", "projr") and self.use_state:
             # §76: refresh head features + exact-credit caches from the post-LRU slots
             den = 0.0
@@ -538,9 +656,166 @@ class Model:
                     else:
                         self.curdots[si] = 0.0
         self.htail = ((self.htail << 8) | b) & ((1 << 48) - 1); self.cur = 0; self.phase = 0
+        if self.arm in ATTN_READ_ARMS:
+            self._attn_forward()       # post-LRU slots, post-htail context -> serves the next byte
         if self.use_match:
             self._match_after(b)
         return None
+
+    # ---- SS77 attentional read ----
+    def _attn_forward(self):
+        """pooled features, top-m vote set and backward caches from the CURRENT slots/params."""
+        sl = self.slots
+        if not sl[0]:
+            self.at_n = 0; self.at_T = []; self.at_hb = []; self.aGa = []
+            self.aGr = [0.0] * SD
+            return
+        ks = [k for k in range(S) if sl[k]]
+        E = []
+        for k in ks:
+            v = self.semb.get(sl[k])
+            if v is None:
+                v = self._svec(sl[k])
+            E.append(v)
+        n = len(ks)
+        if self.arm == "attnrec":
+            den = 0.0
+            for k in ks:
+                den += GP[k]
+            a = [GP[k] / den for k in ks]
+            c = None; q = None
+        else:
+            c = list(E[0])
+            q = [0.0] * SD
+            for i2 in range(SD):
+                Wi = self.Wq[i2]; acc = self.bq[i2]
+                for j in range(SD):
+                    acc += Wi[j] * c[j]
+                q[i2] = acc
+            e = [0.0] * n
+            if self.arm == "attncos":
+                # SS77c: e_k = KAPPA (q.E_k) / (|q||E_k| + 1e-8) + beta_k
+                nq = 0.0
+                for j in range(SD):
+                    nq += q[j] * q[j]
+                nq = math.sqrt(nq)
+                nE = [0.0] * n; sc = [0.0] * n; dn = [0.0] * n
+                for t in range(n):
+                    Et = E[t]; d = 0.0; ne = 0.0
+                    for j in range(SD):
+                        d += q[j] * Et[j]
+                        ne += Et[j] * Et[j]
+                    ne = math.sqrt(ne)
+                    den = nq * ne + 1e-8
+                    nE[t] = ne; sc[t] = d; dn[t] = den
+                    e[t] = KAPPA * d / den + self.beta[ks[t]]
+                self.at_cos = (nq, nE, sc, dn)
+            else:
+                for t in range(n):
+                    Et = E[t]; d = self.beta[ks[t]]
+                    for j in range(SD):
+                        d += q[j] * Et[j]
+                    e[t] = d
+            mx = max(e)
+            ex = [math.exp(x - mx) for x in e]
+            z = sum(ex)
+            a = [x / z for x in ex]
+        r = [0.0] * SD
+        for t in range(n):
+            at = a[t]; Et = E[t]
+            for j in range(SD):
+                r[j] += at * Et[j]
+        T = sorted(range(n), key=lambda t: -a[t])[:TOPM]      # stable: ties -> more recent slot
+        AT = 0.0
+        for t in T:
+            AT += a[t]
+        ctx = self.htail & ((1 << (8 * VORD)) - 1)
+        hb = []
+        for t in T:
+            h = ((sl[ks[t]] * 0x9E3779B97F4A7C15) ^ (ctx * 0xC2B2AE3D27D4EB4F)) & M64
+            h = ((h ^ (h >> 31)) * 0xBF58476D1CE4E5B9) & M64
+            hb.append(h ^ (h >> 27))
+        self.at_n = n; self.at_ks = ks; self.at_E = E; self.at_a = a; self.at_T = T
+        self.at_AT = AT; self.at_wT = [a[t] / AT for t in T]; self.at_c = c; self.at_q = q
+        self.at_r = r; self.at_hb = hb
+        self.aGr = [0.0] * SD; self.aGa = [0.0] * len(T)
+
+    def _attn_grads(self):
+        """exact gradients of the byte's summed nat loss (params frozen within the byte).
+        returns (dE per served slot position, dWq, dbq, dbeta{k: g}); query parts None for attnrec."""
+        n = self.at_n; E = self.at_E; a = self.at_a; Gr = self.aGr
+        if self.arm == "attnrec":
+            dE = [[a[t] * Gr[j] for j in range(SD)] for t in range(n)]
+            return dE, None, None, None
+        dA = [0.0] * n
+        for t in range(n):
+            Et = E[t]; d = 0.0
+            for j in range(SD):
+                d += Gr[j] * Et[j]
+            dA[t] = d
+        for u, t in enumerate(self.at_T):
+            dA[t] += self.aGa[u]
+        sbar = 0.0
+        for t in range(n):
+            sbar += a[t] * dA[t]
+        de = [a[t] * (dA[t] - sbar) for t in range(n)]
+        q = self.at_q; c = self.at_c
+        dq = [0.0] * SD
+        if self.arm == "attncos":
+            # SS77c: e_k = K s_k / den_k + beta_k,  s_k = q.E_k,  den_k = |q||E_k| + 1e-8
+            #   de_k/dq   = K E_k / den_k - K s_k |E_k| (q/|q|)   / den_k^2
+            #   de_k/dE_k = K q   / den_k - K s_k |q|   (E_k/|E_k|) / den_k^2
+            # (|q| = 0 forces s_k = 0, so the second term's exact limit is 0; likewise |E_k| = 0.)
+            nq, nE, sc, dn = self.at_cos
+            dE = [[a[t] * Gr[j] for j in range(SD)] for t in range(n)]
+            for t in range(n):
+                g1 = de[t] * KAPPA / dn[t]
+                h = de[t] * KAPPA * sc[t] / (dn[t] * dn[t])
+                hq = h * nE[t] / nq if nq > 0.0 else 0.0
+                hE = h * nq / nE[t] if nE[t] > 0.0 else 0.0
+                Et = E[t]; dEt = dE[t]
+                for j in range(SD):
+                    dq[j] += g1 * Et[j] - hq * q[j]
+                    dEt[j] += g1 * q[j] - hE * Et[j]
+        else:
+            for t in range(n):
+                dt = de[t]; Et = E[t]
+                for j in range(SD):
+                    dq[j] += dt * Et[j]
+        dbeta = {self.at_ks[t]: de[t] for t in range(n)}
+        dWq = [[dq[i2] * c[j] for j in range(SD)] for i2 in range(SD)]
+        dbq = list(dq)
+        if self.arm != "attncos":
+            dE = [[a[t] * Gr[j] + de[t] * q[j] for j in range(SD)] for t in range(n)]
+        Wq = self.Wq; d0 = dE[0]                     # slot 0 is also the query source
+        for j in range(SD):
+            acc = 0.0
+            for i2 in range(SD):
+                acc += Wq[i2][j] * dq[i2]
+            d0[j] += acc
+        return dE, dWq, dbq, dbeta
+
+    def _attn_apply(self, grads):
+        dE, dWq, dbq, dbeta = grads
+        if self.arm != "attnr":
+            lr = self.lr_s
+            for t in range(self.at_n):
+                v = self.at_E[t]; g = dE[t]
+                for j in range(SD):
+                    e = v[j] - lr * g[j]
+                    v[j] = 1.0 if e > 1.0 else (-1.0 if e < -1.0 else e)
+        if dWq is not None:
+            lr = self.lr_head
+            for i2 in range(SD):
+                Wi = self.Wq[i2]; gi = dWq[i2]
+                for j in range(SD):
+                    e = Wi[j] - lr * gi[j]
+                    Wi[j] = 8.0 if e > 8.0 else (-8.0 if e < -8.0 else e)
+                e = self.bq[i2] - lr * dbq[i2]
+                self.bq[i2] = 8.0 if e > 8.0 else (-8.0 if e < -8.0 else e)
+            for k, g in dbeta.items():
+                e = self.beta[k] - lr * g
+                self.beta[k] = 8.0 if e > 8.0 else (-8.0 if e < -8.0 else e)
 
     def _match_after(self, b):
         """genmem's match model update: extend/break the candidate, register the context."""
@@ -713,6 +988,40 @@ def report(results, sizes, secs):
                 print("  VERDICT (proj): signal present, no cross at these sizes.")
             else:
                 print("  VERDICT (proj): NEGATIVE.")
+    if "attn" in present and "baseline" in present:
+        a_help = series(lambda B, kb: B["baseline"][kb] - B["attn"][kb])         # >0 crosses
+        print(f"attn   vs baseline (crossing)        : {a_help}")
+        a_sel = None
+        if "attnr" in present:
+            a_sem = series(lambda B, kb: B["attnr"][kb] - B["attn"][kb])         # >0 MEANING
+            print(f"attn   vs attnr (MEANING)           : {a_sem}")
+        if "attnrec" in present:
+            a_sel = series(lambda B, kb: B["attnrec"][kb] - B["attn"][kb])       # >0 content beats recency
+            print(f"attn   vs attnrec (SELECTION)       : {a_sel}")
+        if "attnscr" in present:
+            a_noi = series(lambda B, kb: B["attnscr"][kb] - B["attn"][kb])       # >0 real signal
+            print(f"attn   vs attnscr (floor)           : {a_noi}")
+            if any(h > 0.001 for h in a_help) and all(x > 0.003 for x in a_noi):
+                v_a = "CROSS -- the attentional read crosses the orders baseline"
+            elif all(x > 0.003 for x in a_noi):
+                v_a = "signal present, no cross at these sizes"
+            else:
+                v_a = "NEGATIVE"
+        else:
+            v_a = "no floor arm (attnscr) -- verdict undetermined"
+        if a_sel is not None:
+            v_a += ("; SELECTION > 0 at every size (content beats recency)" if all(x > 0 for x in a_sel)
+                    else "; SELECTION NOT > 0 at every size (content does not beat recency)")
+        else:
+            v_a += "; SELECTION untested (no attnrec arm)"
+        print(f"  VERDICT (attn): {v_a}.")
+    if "attncos" in present:
+        if "baseline" in present:
+            c_help = series(lambda B, kb: B["baseline"][kb] - B["attncos"][kb])  # >0 crosses
+            print(f"attncos vs baseline (crossing)       : {c_help}")
+        if "attnrec" in present:
+            c_sel = series(lambda B, kb: B["attnrec"][kb] - B["attncos"][kb])    # >0 content beats recency
+            print(f"attncos vs attnrec (SELECTION)       : {c_sel}")
     print(f"\n[{secs:.0f}s total]")
 
 
@@ -735,19 +1044,22 @@ def main():
         arms = sys.argv[sys.argv.index("--arms") + 1].split(",")
     else:
         arms = ARMS
+    seed = int(sys.argv[sys.argv.index("--seed") + 1]) if "--seed" in sys.argv else 0
     ARMS = arms                       # report() prints what actually ran
     print("=" * 104)
     print("SEMANTIC-STATE instrument (SS72-74 lineage)")
     print(f"  data: {train_path} / {test_path}")
-    print(f"  arms: {' | '.join(ARMS)}   sizes(KB): {sizes}")
+    print(f"  arms: {' | '.join(ARMS)}   sizes(KB): {sizes}   seed: {seed}")
+    print(f"  slots: WSLOTMODE={SLOTMODE}  WSLOTS={S}  WHEADS={H}  WGAMMA={GAMMA}"
+          f"  WTOPM={TOPM}  WVORD={VORD}  WVBITS={VBITS}  WKAPPA={KAPPA}")
     print("  gate: copy/match OFF, 13-byte-decontaminated held-out, deterministic mask")
     print("=" * 104)
     t0 = time.time()
     if selftest:
-        results = [run_arm(a, sizes, 0, train_path, test_path) for a in ARMS]
+        results = [run_arm(a, sizes, seed, train_path, test_path) for a in ARMS]
     else:
         with ProcessPoolExecutor(max_workers=len(ARMS)) as ex:
-            futs = [ex.submit(run_arm, a, sizes, 0, train_path, test_path) for a in ARMS]
+            futs = [ex.submit(run_arm, a, sizes, seed, train_path, test_path) for a in ARMS]
             results = [f.result() for f in futs]
     secs = time.time() - t0
     for arm, rows, dt, _ in results:

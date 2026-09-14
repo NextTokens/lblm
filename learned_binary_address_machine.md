@@ -2989,6 +2989,8 @@ with local context, with a measured sample-efficiency edge that the orders erase
 
 ## 72. Phase 1 of the new plan — the parity wall FALLS: word-slot binding, vectors the compression loss teaches (`wstate.py`)
 
+> **Corrected by §77:** the slot LRU here held word prefixes, not words (six slots ≈ two words); the crossing is a learned current-word model, and the engine port trained its vectors with the wrong sign. See §77.5.
+
 The §70/§71 ceiling (every no-copy channel ties the orders) is broken — not by more capacity or
 better credit, but by fixing **what the state representation can hold**. The experiment,
 `wstate.py` (7 arms, genmem gate: copy OFF, 13-byte-decontaminated held-out wt103, deterministic
@@ -3053,6 +3055,8 @@ the word tail), then soft retrieval — the match model's generalisation.
 
 ## 73. Phase 2, step 1 — hard similarity keying honestly fails; the soft-retrieval requirement (`wstate.py`)
 
+> **Corrected by §77:** `slots[0]` was the current prefix at word-interior bytes, so `slotsw` was a word model and `semsim` bucketed per-prefix predictor vectors; this section could not measure similarity. See §77.5.
+
 Phase 2's thesis (from §72's port negative): identity memory is cheap at production capacity;
 the open lever is **similarity** — generalisation across related words. Step 1 tested it in the
 instrument with the cheapest possible mechanism: a count-table expert keyed not by word ID but
@@ -3105,6 +3109,8 @@ only by beating **strong itself** at 11 MB, not the orders-only rail.
 
 ## 74. Phase 2, step 2 — soft retrieval in the production engine: built, measured, honestly inert (`strong.rs`, `BLSOFT=1`)
 
+> **Corrected by §77:** the vectors were trained with the wrong sign and the vote read the statistic of the delimiter that follows a similar word and applied it to the next word's letters, so this retrieval was inert by construction. See §77.5.
+
 The §73 requirement, implemented exactly as named: the §72 word vectors indexed in an LSH
 structure (sign bucket + the 8 one-bit-flip neighbours, capped lists); once per byte the last
 completed word retrieves its top-`SOFTK` neighbours by normalised dot (≥ `SIMMIN`); per bit the
@@ -3146,6 +3152,8 @@ tool; ports follow the beats-strong rule.
 ---
 
 ## 75. The frontier sweep — scale, long-range-rich domains, and the absorber identified (`wstate.py`, `strong.rs`)
+
+> **Corrected by §77:** instrument S=32 held ~7.5 words, the depth "information" was a noise-dimension penalty, and the absorber claim falls once the port's sign is fixed. See §77.5.
 
 The two named next steps of §74, executed end to end, plus the mechanism question they forced.
 
@@ -3195,6 +3203,8 @@ named the true one.
 
 ## 76. Attacking the information-vs-readout gap — shared recency-discounted heads (`wstate.py` `proj` arms)
 
+> **Corrected by §77:** the depth target this section attacks was a noise-dimension artifact; slots held prefixes. See §77.5.
+
 §75 left a measured target: at slot depth 32 the state's raw information GREW (scrambled-floor
 separation +0.64 vs +0.17 at depth 6) while net value went negative — the linear mixer over 256
 raw dims drowns in variance. The §76 build: replace the per-(position, dim) weights with **H=4
@@ -3231,6 +3241,201 @@ code ≫ text ≫ DNA; the word-model-family absorber; the depth information gap
 that could matter in production is an attentional read of the deep slot memory — select by
 content, not by recency — developed instrument-first under the same gate, ported only on
 beats-strong.
+
+---
+
+## 77. The audit — the §72 channel was a word model, the port trained its vectors uphill, and the attentional read fails its probe (`wstate.py` WSLOTMODE + `attn*` arms, `strong.rs` sign fix + `BLSTRIPW/H`, `_bind_probe.py`)
+
+**This section corrects §72–§76.** The planned §77 build (an attentional read of deep slot memory,
+HANDOVER §5) was preceded by a premise check, and the check found two implementation defects that
+change what §72–§76 measured. Every finding below was red-teamed by independent agents
+(mismatch hunt, claims audit, code review with complex-step gradients, probe re-scoring).
+
+### 77.1 Two defects
+
+1. **The instrument's slot memory held word PREFIXES, not words.** `wstate.py` moved the growing
+   prefix id to the front of the LRU at every letter byte. After "the quick brown fox … the quick
+   cat" the S=6 slots were `cat, ca, c, quick, quic, qui`. Over 300 KB of wt103, S=6 held 1.98
+   distinct words on average counting the word being typed (1.21 whole previous words) and S=32
+   held 7.55; slot 0 was the current prefix at 100 % of letter
+   bytes. The ledger and code comments described "the last S distinct words" throughout §72–§76,
+   and §73's "rekeyed on the last completed word" never happened at word-interior bytes.
+   `strong.rs BLMSLOTS` inserts only completed words, so **the port never tested the channel that
+   crossed**. Fix: env `WSLOTMODE=prefix` (default, bit-identical to §72–§76: sha256 of per-bit cost streams matches the
+   committed code on 9 legacy arms) | `word` (completed words only, matching the engine).
+2. **The engine trained slot vectors in the wrong direction.** `strong.rs` accumulated
+   `g += (y − p_g)·w` (= −dL/df) and applied `v −= lr_s·g`, which is gradient ASCENT. The header
+   comment described the correct step. Every §72/§74/§75 production A/B with `BLMSLOTS` or `BLSOFT`
+   therefore ran vectors pushed uphill. Fixed to `v += lr_s·g`; default bit-identity re-verified
+   (0.231704 @ 300 KB `corpus.txt`). At 300 KB, `BLMSLOTS=1` moves from 0.231895 (bug) to 0.231708.
+
+Further defects the audit found (documented, not fixed): `BLSOFT` votes each neighbour's `wdc`
+counts keyed as if the neighbour were the current prefix — the statistic of the delimiter after
+that word — and applies it to the letters of the next word, so §74 soft retrieval was inert by
+construction; the §73 hard-similarity arms bucketed per-prefix predictor vectors, so they could not
+measure similarity; `semfast` carries S permanently-zero inputs.
+
+### 77.2 The re-gate: what the §72 channel actually was
+
+Same gate as §72 (copy OFF, 13-byte decontamination, deterministic mask), **seed 0 only**, arms in
+parallel. Values are bits/byte on the scored held-out bytes; lower is better. Outputs: `_77a_*.txt`.
+All slot arms also carry the M=32 EMA state and bucket expert.
+
+**Code** (`code_train/test`):
+
+| arm | 100 KB | 200 KB | 400 KB | 585 KB |
+|---|---|---|---|---|
+| baseline (orders 0–6) | 2.1948 | 1.9731 | 2.0504 | 2.1037 |
+| §72 slots, prefix S=6 | 2.1862 | 1.9656 | 2.0392 | 2.0916 |
+| **one prefix slot (S=1), learned** | **2.1803** | **1.9578** | **2.0321** | **2.0834** |
+| one prefix slot, frozen | 2.2028 | 1.9800 | 2.0588 | 2.1117 |
+| whole words S=6, learned | 2.2114 | 1.9892 | 2.0654 | 2.1189 |
+| whole words S=6, frozen | 2.2060 | 1.9851 | 2.0634 | 2.1172 |
+| whole words S=32, learned | 2.2194 | 1.9967 | 2.0750 | 2.1285 |
+| whole words S=32, frozen | 2.2261 | 2.0032 | 2.0813 | 2.1358 |
+
+**wt103** (`wt103_train/test`):
+
+| arm | 150 KB | 450 KB | 1200 KB | 2700 KB |
+|---|---|---|---|---|
+| baseline | 2.3675 | 2.2758 | 2.3715 | 2.4793 |
+| §72 slots, prefix S=6 | 2.3705 | 2.2769 | 2.3695 | 2.4766 |
+| **one prefix slot (S=1), learned** | **2.3606** | **2.2667** | **2.3590** | **2.4641** |
+| one prefix slot, frozen | 2.3741 | 2.2836 | 2.3797 | 2.4888 |
+| whole words S=6, learned | 2.3814 | 2.2925 | 2.3915 | 2.5026 |
+| whole words S=6, frozen | 2.3767 | 2.2869 | 2.3842 | 2.4930 |
+| whole words S=32, learned | 2.4046 | 2.3170 | 2.4152 | 2.5286 |
+| whole words S=32, frozen | 2.3962 | 2.3057 | 2.4043 | 2.5149 |
+
+**Findings.**
+- **The §72 win is a learned current-word model.** One slot that holds the current prefix beats the
+  orders baseline by +0.0145…+0.0203 on code and +0.0069…+0.0152 on wt103, growing with data —
+  1.7× the §72 six-slot margin on code and ~5.6× on wt103 at the largest sizes. Frozen random vectors in the same slot
+  lose. Extra slots only dilute it. An 8-dim vector per prefix id is a word model, which the
+  orders-0..6 baseline lacks and `strong.rs` already has (`wdc`, keyed per prefix). "Meaning"
+  (learned vs frozen) was per-id trainable parameters versus none.
+- **Real word binding loses.** Whole-word slots are worse than baseline at every size, at 6 and 32
+  slots, on both corpora. The loss grows with data on wt103 (−0.0139 → −0.0233 at S=6, −0.0371 →
+  −0.0493 at S=32). Learned vectors are worse than frozen ones at S=6 on both corpora and at S=32 on
+  wt103; only code at S=32 has learned beating frozen (+0.006…+0.007), still below baseline. Part of the loss is EMA overhead, but on wt103 the S=6 arm is
+  also worse than the §72 `bitsonly` arm (EMA only) by −0.008…−0.014. The effects are ~10× the §72
+  seed spread, so seed 0 is likely representative, but they are not replicated.
+- **The §75/§76 "information at depth" was a noise-dimension penalty.** Scrambled-minus-baseline on
+  code at 100 KB is +0.078 / +0.162 / +0.669 for 40 / 80 / 288 noise dims (≈0.002 bpb per dim), and
+  frozen random vectors show the same "floor separation" as learned ones. There was no measured
+  depth target for the attentional read.
+
+### 77.3 Production with the sign fixed, and the absorber ablation
+
+New flags (default OFF, bit-identical): `BLSTRIPW=1` removes the word and previous-word models
+(and the word context of APM5); `BLSTRIPH=1` removes hashed orders 8–32. Full length, obits 25,
+bits/bit whole-stream. Slot gain = (X) − (X + `BLMSLOTS=1`); positive means slots helped. Outputs:
+`_77b_*.txt`.
+
+| engine variant | corpus_big 11 MB | + slots | slot gain | stdlib.bin 10.6 MB | + slots | slot gain |
+|---|---|---|---|---|---|---|
+| full | 0.217011 | 0.217016 | −0.000005 | 0.127624 | 0.127586 | +0.000038 |
+| no word models | 0.220255 | 0.220256 | −0.000001 | 0.129935 | 0.129892 | +0.000043 |
+| no high orders | 0.217073 | 0.217076 | −0.000003 | 0.128946 | 0.128897 | +0.000049 |
+| neither | 0.220438 | 0.220438 | 0.000000 | 0.131433 | 0.131386 | +0.000047 |
+
+- **Whole-word slots carry nothing on text** even with learning fixed and the word models removed.
+- **On code they give a tiny consistent gain** (+0.00004 bits/bit, 0.03 %) that barely changes
+  (+0.000038 → +0.000043) when the word models are removed. **Removing the word-model family reveals
+  no hidden whole-word slot signal.** Whether it absorbs the §72 learned prefix-vector channel was
+  never tested, because that channel was never ported. §75's `slotsw` evidence compared a word model
+  against a diluted word model.
+- These are whole-stream online compression numbers, not decontaminated held-out numbers.
+- The word models are worth +0.0032 (text) and +0.0023 (code) bits/bit. Hashed orders 8–32 are worth
+  +0.00006 on text and +0.0013 on code at full size (at ≤1 MB they were slightly negative on text).
+
+### 77.4 The long-gap content-binding probe (`_bind_probe.py`, output `_77p_probe.txt`)
+
+Synthetic stream: `<cue> <G distractors> then <outcome> .` with 8 nonce cues mapped to 8 outcome
+words and 26 distractor words. Gain = bits saved on the outcome word versus the orders baseline
+(bound ≈ 3 bits), 1200 training sentences, 200 newly drawn test sentences scored online, data seeds 7/8 (at G=2,
+37/200 and 50/200 test sentences repeat a training sentence verbatim; gains are the same on repeats).
+Criteria were written into the script before any run (file saved 12:38:22, first result 12:38:30;
+wstate snapshot sha256 `376380201f…e860`). All word-mode 32-slot arms had the cue in memory on
+100 % of test outcomes (mean LRU position 3.0 / 10.7 / 16.9 at G = 2 / 12 / 24).
+
+Pre-registered: **P1** sanity — at G=2 the best of {free readout S=32, `attn`, `attncos`} gains
+≥ 1.0 bit on both seeds. **P2** content binding — at G=12 and G=24 on both seeds an attention arm
+gains ≥ 1.5 bits, beats `attnrec` by ≥ 1.0 and beats the best of {free readout, §76 heads} by ≥ 0.5.
+**P3** reach — S=6 whole words and prefix S=32 gain ≤ 0.3 at G=24. **Kill rule** — if P2 fails, no
+corpus grid for the attention arms.
+
+| arm | G=2 s7 | G=2 s8 | G=12 s7 | G=12 s8 | G=24 s7 | G=24 s8 |
+|---|---|---|---|---|---|---|
+| whole words S=6 (reach control) | +0.769 | +0.798 | −0.036 | −0.051 | −0.075 | −0.022 |
+| prefix S=32 (legacy deep arm) | +0.355 | +0.435 | −0.131 | −0.083 | −0.105 | −0.104 |
+| whole words S=32, free readout | +0.506 | +0.502 | −0.196 | −0.167 | −0.179 | −0.243 |
+| §76 heads, whole words S=32 | +0.034 | +0.050 | −0.019 | −0.028 | −0.016 | −0.024 |
+| `attn` (content attention) | −0.044 | −0.003 | −0.011 | +0.007 | −0.019 | −0.043 |
+| `attncos` (cosine attention, κ=8) | −0.041 | −0.020 | −0.039 | −0.003 | −0.036 | −0.060 |
+| `attnr` (frozen vectors) | −0.024 | −0.034 | −0.022 | −0.001 | −0.032 | −0.024 |
+| `attnrec` (recency vote) | +2.184 | +2.057 | −0.002 | −0.020 | −0.013 | −0.016 |
+
+Secondary (G=12, seed 7, 3600 training sentences): `attn` −0.037, `attncos` −0.030, `attnrec` −0.055.
+
+**Verdict: P1 FAIL, P2 FAIL, P3 PASS — the kill rule fires; no corpus grid for the attention arms.**
+Scope: these arms at default settings (WTOPM=4, κ=8, default learning rates, untuned). No
+content-attention arm binds a cue at any gap, even two words back, and tripling the data at G=12
+(one seed) does not help. The pre-registered sanity check P1 failed; the evidence that the probe can
+register binding is post hoc: `attnrec` recovers ~70 % of the information at G=2, where the cue is
+recent enough to enter its vote set.
+
+The red-team recomputed every table cell from the 58 per-job records and independently re-ran 6 G=2
+cells (plus the baseline under the prefix env), matching per sentence to within 9e-16. It also
+measured the vote readout in 3 cells (one seed each, 17–45 test outcomes): when a content arm puts the
+cue in its vote set, the cue's vote entry predicts the true bit 84–94 % of the time on the informative
+bits 3–7 of the outcome's first byte, but the mixer weight on the vote feature averages negative
+(−0.16…−0.76; `attnrec` +1.22), so a correct vote pushes away from the true bit (−0.05…−0.10). The
+cause of that sign was not isolated: `attnrec`'s vote set at G=2 is also 3/4 non-cue, yet its weight is
+positive. With a negative weight the gradient favours moving attention off correct voters; this is
+consistent with a self-reinforcing readout trap, inferred from end-of-run snapshots and not traced
+during training, and suggests more than a selection failure.
+
+Attention behaviour: `attn` at the pre-registered init was near-uniform and position-driven (content
+logit spread ~0.002). `attncos` (added after that diagnosis; scored only on the synthetic probe) was
+sharp. On 40 KB of wt103 and code its choice was dominated by the learned bias direction `bq` (argmax
+unchanged on 83–96 % of bytes when the query word is removed); on the probe stream its argmax varied
+across all 32 slots and did not select the cue.
+
+### 77.5 What stands and what falls in §72–§76
+
+| claim | status |
+|---|---|
+| §70/§71 EMA-state and induced channels reach parity only | stands (untouched by both defects) |
+| §72 "word-slot binding crosses the parity wall" | falls — the crossing is a learned current-word model |
+| §72 "the win is meaning beyond identity" | falls — per-id parameters versus none |
+| §72/§74/§75 production numbers | stand as measurements of uphill-trained vectors and a mis-keyed vote; they say nothing about learned slots |
+| §73 "hard quantisation destroys similarity; similarity must be read softly" | unsupported — the bucketed vectors were per-prefix predictors |
+| §74 "soft retrieval inert because tail vectors are under-trained" | falls — inert by construction (sign + keying) |
+| §75 "code ≫ text ≫ DNA" | stands for a learned word model over orders 0–6, not for word binding |
+| §75 "the word-model family is the absorber" | unsupported as stated — whole-word slots have almost nothing for it to absorb (§77.3); the §72 channel it was meant to explain is itself a word model and was never ported |
+| §75/§76 "information exists at depth; readout capacity is the gap" | falls — noise-dimension penalty |
+| §76 "proj@6 crosses on code" | overstated — negative at 100/200 KB, single seed |
+| §75 "copy is not the absorber" | weak — the match model is worse than no match under 13-gram decontamination |
+
+The §77 re-gate verdicts in this table are seed 0 and one deterministic engine run per config.
+
+### 77.6 Where this leaves the strain
+
+After §69–§77, the only learned memory channel that beat order-n statistics on leak-free held-out data
+was a learned current-prefix vector, which is a word model. Production has a count word model, but the
+learned vector was never tested against one or ported. Whole-word binding failed once measured
+correctly (code and wt103 at seed 0, production at 11 MB). Recency heads and content attention were
+re-tested in word mode only on the synthetic probe, where they failed. Soft similarity was never
+re-measured with correct keying. The only positive production result is +0.00004 bits/bit on code, at
+about 1–6 % more wall-clock time (+1.8 % for the full engine on stdlib; concurrent runs, noisy).
+
+Recommendation: close the learned-memory model track. The pre-registered kill rule fired, and every
+§72–§76 positive that was decomposed traced to a bug or a word model. Two narrow, measured loose ends
+remain if anyone reopens it: (1) the vote-readout trap of §77.4 — a forced-selection oracle (cue forced
+into the vote set during training and test, vote weight logged; needs new code) would show whether the
+vote readout works once selection is given; (2) the §72 learned prefix vector against a count word
+model on the same gate, which would settle whether it is anything more than a word model.
 
 ---
 

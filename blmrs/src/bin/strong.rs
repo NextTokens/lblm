@@ -25,6 +25,11 @@
 //! same e_g signal; per-bit credit slot_vec[k] += (y-p_g)*head_w[k] accumulates per byte and is
 //! applied to the word's vector at byte end (LR_S). Vectors live in a tagged flat table keyed by
 //! word hash (deterministic splitmix init), evict-on-collision like every other table.
+//! §77 SIGN FIX: until §77 the code applied v -= LR_S*g with g = sum (y-p_g)*w (gradient ASCENT), so
+//! every §72/§74/§75 BLMSLOTS/BLSOFT A/B ran uphill-trained vectors. Fixed to v += LR_S*g.
+//! §77 ALSO CORRECTS THE TEXT ABOVE: the wstate.py "crossing" cited in the §72 paragraph came from an LRU of word
+//! PREFIXES (a learned current-word model), not completed words -- whole-word slots lose there -- and §73's
+//! hard-key result is unsupported (the bucketed vectors were per-prefix predictors). See ledger §77.5.
 //!
 //! §74 SOFT RETRIEVAL (env BLSOFT=1, implies the §72 machinery): §73 proved HARD similarity keys
 //! (sign buckets as count-table keys) fail — quantisation destroys the graded information. The
@@ -35,6 +40,26 @@
 //! stretch() head on the global mixer. This is "predict what follows words SIMILAR to the last
 //! word" — generalisation across the word tail that identity keys cannot give. Port rule (§72):
 //! earns its place only by beating strong's own 11MB baseline (0.217011).
+//!
+//! §77 ABSORBER ABLATION (env BLSTRIPW=1 / BLSTRIPH=1, both default OFF = bit-identical baseline):
+//! §75 named strong's word-keyed family as the absorber of the §72 slot signal; these flags remove
+//! it so the slot channel can be A/B'd against a strong WITHOUT it. A stripped model's mixer input
+//! (its stretch) is exactly 0.0 every bit, so its weights in all three mixers get zero gradient and
+//! stay 0, and its tables are neither read nor updated. BLSTRIPW=1 strips the word model (wdc) and
+//! the previous-word model (wdc2), AND the one place word_hash is used as a CONTEXT rather than a
+//! model input: the APM5 SSE stage, whose context (word_hash&511, phase) collapses to (0, phase) --
+//! the stage still runs (same chain shape) but carries no word identity. word_hash itself is still
+//! computed because the §72 slot LRU needs it (BLMSLOTS=1 works with either flag); prev_word_hash
+//! has no other consumer. BLSTRIPH=1 strips the hashed high orders HORDERS {8,12,16,24,32} (htab;
+//! hbase is not even computed). Nothing else reads word_hash/prev_word_hash/wdc/wdc2/htab/hbase:
+//! the ICMs index the ORDERS 2..6 slots, the sparse models hash raw byte pairs, the match models
+//! keep their own rolling hash, mixer selection uses prev_byte/prev2, APM6's order-3 context comes
+//! from htail. BLSOFT=1 votes the wdc tables, so BLSOFT=1 with BLSTRIPW=1 is undefined and exits
+//! with an error. The active flags are printed on a `flags:` line under the header.
+//! §77 KNOWN DEFECT (not fixed; track closed): the BLSOFT vote reads wdc[(neighbour<<12)|partial], the
+//! word-model statistic for the byte AFTER the neighbour's letters (its delimiter), and applies it to
+//! the letters of the next word -- inert by construction. Result with the sign fix (§77.3): whole-word
+//! slots add -0.000005 bits/bit on corpus_big and +0.00004 on stdlib, with or without BLSTRIPW/H.
 
 use std::collections::HashMap;
 use std::env;
@@ -224,6 +249,12 @@ fn main() {
     let use_slots = env::var("BLMSLOTS").map(|s| s == "1").unwrap_or(false);
     let blsoft = env::var("BLSOFT").map(|s| s == "1").unwrap_or(false);
     let use_slots = use_slots || blsoft;      // §74 soft retrieval needs the §72 vectors
+    let strip_w = env::var("BLSTRIPW").map(|s| s == "1").unwrap_or(false);  // §77 no word/prev-word
+    let strip_h = env::var("BLSTRIPH").map(|s| s == "1").unwrap_or(false);  // §77 no hashed orders 8..32
+    if blsoft && strip_w {
+        eprintln!("error: BLSOFT=1 with BLSTRIPW=1 is undefined (the soft vote reads the stripped word-model tables wdc)");
+        std::process::exit(2);
+    }
     let lr_s = envf("LR_S", 0.02);       // §72 slot-vector learning rate
     let sbits: u32 = envf("SBITS", 22.0) as u32;   // slot-vector table bits (evict-on-collision)
     let alr_slot = envf("ALRS", 0.0015); // §72 slot-head mixer LR (own knob, default between strong's and wstate's)
@@ -338,14 +369,18 @@ fn main() {
             sts[k] = stretch((n1 + delta) / (n0 + n1 + d2));
         }
         // high orders (merged hashed)
-        for hk in 0..NH {
-            let hv = hbase[hk];
-            let slot = ((hv.wrapping_mul(2654435761)
-                ^ (phase as u64).wrapping_mul(0x9E37_79B1)
-                ^ prefix.wrapping_mul(2246822519)) & hmask) as usize * 2;
-            hslot[hk] = slot;
-            let (n0, n1) = (htab[hk][slot] as f64, htab[hk][slot + 1] as f64);
-            sts[NM + hk] = stretch((n1 + delta) / (n0 + n1 + d2));
+        if strip_h {
+            for hk in 0..NH { sts[NM + hk] = 0.0; } // §77: stripped -> exact-zero mixer input
+        } else {
+            for hk in 0..NH {
+                let hv = hbase[hk];
+                let slot = ((hv.wrapping_mul(2654435761)
+                    ^ (phase as u64).wrapping_mul(0x9E37_79B1)
+                    ^ prefix.wrapping_mul(2246822519)) & hmask) as usize * 2;
+                hslot[hk] = slot;
+                let (n0, n1) = (htab[hk][slot] as f64, htab[hk][slot + 1] as f64);
+                sts[NM + hk] = stretch((n1 + delta) / (n0 + n1 + d2));
+            }
         }
         // sparse models: non-adjacent byte pairs (capture gaps the contiguous orders miss)
         for j in 0..NSP {
@@ -361,28 +396,34 @@ fn main() {
             let (n0, n1) = (spc[j][2 * ti] as f64, spc[j][2 * ti + 1] as f64);
             sts[NM + NH + j] = stretch((n1 + delta) / (n0 + n1 + d2));
         }
-        // word
-        let wk = (word_hash << 12) | ((((1u64 << phase) | cur) << 3) | (phase as u64));
-        {
-            let h = wk.wrapping_mul(MULT);
-            let ti = (h >> (64 - obits)) as usize;
-            let want = ((h >> (64 - obits - 8)) & 0xFF) as u8;
-            if wdtag[ti] != want { wdtag[ti] = want; wdc[2 * ti] = 0; wdc[2 * ti + 1] = 0; }
-            wd_slot = ti;
-            let (n0, n1) = (wdc[2 * ti] as f64, wdc[2 * ti + 1] as f64);
-            sts[NM + NH + NSP] = stretch((n1 + delta) / (n0 + n1 + d2));
-        }
-        // previous-word model: predict the current word's bits from the WORD BEFORE it (text bigrams)
-        let wctx = prev_word_hash.wrapping_mul(0x9E37_79B1).wrapping_add(word_hash.wrapping_mul(2654435761));
-        let wk2 = (wctx << 12) | ((((1u64 << phase) | cur) << 3) | (phase as u64));
-        {
-            let h = wk2.wrapping_mul(MULT);
-            let ti = (h >> (64 - obits)) as usize;
-            let want = ((h >> (64 - obits - 8)) & 0xFF) as u8;
-            if wdtag2[ti] != want { wdtag2[ti] = want; wdc2[2 * ti] = 0; wdc2[2 * ti + 1] = 0; }
-            wd2_slot = ti;
-            let (n0, n1) = (wdc2[2 * ti] as f64, wdc2[2 * ti + 1] as f64);
-            sts[NM + NH + NSP + 1] = stretch((n1 + delta) / (n0 + n1 + d2));
+        if strip_w {
+            // §77: word + previous-word models stripped -> exact-zero mixer inputs, tables untouched
+            sts[NM + NH + NSP] = 0.0;
+            sts[NM + NH + NSP + 1] = 0.0;
+        } else {
+            // word
+            let wk = (word_hash << 12) | ((((1u64 << phase) | cur) << 3) | (phase as u64));
+            {
+                let h = wk.wrapping_mul(MULT);
+                let ti = (h >> (64 - obits)) as usize;
+                let want = ((h >> (64 - obits - 8)) & 0xFF) as u8;
+                if wdtag[ti] != want { wdtag[ti] = want; wdc[2 * ti] = 0; wdc[2 * ti + 1] = 0; }
+                wd_slot = ti;
+                let (n0, n1) = (wdc[2 * ti] as f64, wdc[2 * ti + 1] as f64);
+                sts[NM + NH + NSP] = stretch((n1 + delta) / (n0 + n1 + d2));
+            }
+            // previous-word model: predict the current word's bits from the WORD BEFORE it (text bigrams)
+            let wctx = prev_word_hash.wrapping_mul(0x9E37_79B1).wrapping_add(word_hash.wrapping_mul(2654435761));
+            let wk2 = (wctx << 12) | ((((1u64 << phase) | cur) << 3) | (phase as u64));
+            {
+                let h = wk2.wrapping_mul(MULT);
+                let ti = (h >> (64 - obits)) as usize;
+                let want = ((h >> (64 - obits - 8)) & 0xFF) as u8;
+                if wdtag2[ti] != want { wdtag2[ti] = want; wdc2[2 * ti] = 0; wdc2[2 * ti + 1] = 0; }
+                wd2_slot = ti;
+                let (n0, n1) = (wdc2[2 * ti] as f64, wdc2[2 * ti + 1] as f64);
+                sts[NM + NH + NSP + 1] = stretch((n1 + delta) / (n0 + n1 + d2));
+            }
         }
         sts[NM + NH + NSP + 2] = mm.predicted(&hist, phase, byte_pos);
         sts[NM + NH + NSP + 3] = mm2.predicted(&hist, phase, byte_pos);
@@ -453,7 +494,9 @@ fn main() {
         p = 0.3 * p + 0.7 * pc0;
         let pd0 = apm4.refine(p, ((mm.len.min(31) << 3) | phase) as usize);
         p = 0.3 * p + 0.7 * pd0;
-        let pe0 = apm5.refine(p, (((word_hash & 511) << 3) | phase as u64) as usize);
+        // §77: APM5 is the only CONTEXT use of word_hash; under BLSTRIPW its context is phase only
+        let apm5_w = if strip_w { 0 } else { word_hash & 511 };
+        let pe0 = apm5.refine(p, ((apm5_w << 3) | phase as u64) as usize);
         p = 0.3 * p + 0.7 * pe0;
         let pf0 = apm6.refine(p, ((((htail ^ (htail >> 13)) & 511) << 3) | phase as u64) as usize);
         p = 0.3 * p + 0.7 * pf0;
@@ -547,17 +590,21 @@ fn main() {
             let s = 2 * sp_slot[j]; spc[j][s + yi] += 1;
             if spc[j][s + yi] >= CLIMIT { spc[j][s] = (spc[j][s] + 1) >> 1; spc[j][s + 1] = (spc[j][s + 1] + 1) >> 1; }
         }
-        {
-            let s = 2 * wd_slot; wdc[s + yi] += 1;
-            if wdc[s + yi] >= CLIMIT { wdc[s] = (wdc[s] + 1) >> 1; wdc[s + 1] = (wdc[s + 1] + 1) >> 1; }
+        if !strip_w {
+            {
+                let s = 2 * wd_slot; wdc[s + yi] += 1;
+                if wdc[s + yi] >= CLIMIT { wdc[s] = (wdc[s] + 1) >> 1; wdc[s + 1] = (wdc[s + 1] + 1) >> 1; }
+            }
+            {
+                let s = 2 * wd2_slot; wdc2[s + yi] += 1;
+                if wdc2[s + yi] >= CLIMIT { wdc2[s] = (wdc2[s] + 1) >> 1; wdc2[s + 1] = (wdc2[s + 1] + 1) >> 1; }
+            }
         }
-        {
-            let s = 2 * wd2_slot; wdc2[s + yi] += 1;
-            if wdc2[s + yi] >= CLIMIT { wdc2[s] = (wdc2[s] + 1) >> 1; wdc2[s + 1] = (wdc2[s + 1] + 1) >> 1; }
-        }
-        for hk in 0..NH {
-            let s = hslot[hk]; htab[hk][s + yi] += 1;
-            if htab[hk][s + yi] >= CLIMIT { htab[hk][s] = (htab[hk][s] + 1) >> 1; htab[hk][s + 1] = (htab[hk][s + 1] + 1) >> 1; }
+        if !strip_h {
+            for hk in 0..NH {
+                let s = hslot[hk]; htab[hk][s + yi] += 1;
+                if htab[hk][s + yi] >= CLIMIT { htab[hk][s] = (htab[hk][s] + 1) >> 1; htab[hk][s + 1] = (htab[hk][s + 1] + 1) >> 1; }
+            }
         }
         apm1.update(yf);
         apm2.update(yf);
@@ -576,7 +623,9 @@ fn main() {
                     let ti = slot_tabi[si];
                     let g = &mut sgrad[si];
                     for k in 0..SD {
-                        let e = semb[ti][k] - lr_s * g[k];
+                        // §77 SIGN FIX: g accumulates e_g*w = (y-p_g)*w = -dL/df, so descent is
+                        // v += lr_s*g. §72-§76 subtracted it (gradient ASCENT on the vectors).
+                        let e = semb[ti][k] + lr_s * g[k];
                         semb[ti][k] = if e > 1.0 { 1.0 } else if e < -1.0 { -1.0 } else { e };
                         g[k] = 0.0;
                     }
@@ -672,12 +721,14 @@ fn main() {
                 }
             }
             prev2 = prev_byte; prev_byte = b as u64; cur = 0; phase = 0; byte_pos += 1;
-            for hk in 0..NH {
-                let bb = HORDERS[hk];
-                let lo = if byte_pos >= bb { byte_pos - bb } else { 0 };
-                let mut hv: u64 = 1469598103934665603;
-                for bp in lo..byte_pos { hv = (hv ^ hist[bp] as u64).wrapping_mul(1099511628211); }
-                hbase[hk] = hv;
+            if !strip_h {
+                for hk in 0..NH {
+                    let bb = HORDERS[hk];
+                    let lo = if byte_pos >= bb { byte_pos - bb } else { 0 };
+                    let mut hv: u64 = 1469598103934665603;
+                    for bp in lo..byte_pos { hv = (hv ^ hist[bp] as u64).wrapping_mul(1099511628211); }
+                    hbase[hk] = hv;
+                }
             }
         }
     }
@@ -685,6 +736,8 @@ fn main() {
     let whole = tot / n as f64;
     let last = if tailn > 0 { tail / tailn as f64 } else { 0.0 };
     println!("corpus={}  bytes={}  bits={}  obits={}", path, raw.len(), n, obits);
+    println!("  flags: BLSTRIPW={} BLSTRIPH={} BLMSLOTS={} BLSOFT={} NSLOTS={}",
+             strip_w as u8, strip_h as u8, use_slots as u8, blsoft as u8, nslots);
     println!("  blmrs-strong  whole-stream = {:.6}   last-20% = {:.6}  bits/bit   [{:.1}s, {:.1} Mbits/s]",
              whole, last, secs, (n as f64 / 1e6) / secs);
 }
