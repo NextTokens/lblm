@@ -60,6 +60,25 @@
 //! word-model statistic for the byte AFTER the neighbour's letters (its delimiter), and applies it to
 //! the letters of the next word -- inert by construction. Result with the sign fix (§77.3): whole-word
 //! slots add -0.000005 bits/bit on corpus_big and +0.00004 on stdlib, with or without BLSTRIPW/H.
+//!
+//! §79 PER-PREFIX VECTOR + NONSTATIONARY COUNTS (env BLPVEC / BLWNS / BLNSALL, all default OFF =
+//! bit-identical baseline). BLPVEC=2 ports the rr78 scratch mode 2 (which beat both ~11 MB baselines (corpus_big 11 MB, stdlib.bin 10.6 MB):
+//! corpus_big 0.217011 -> 0.216509, stdlib 0.127624 -> 0.127204; frozen LR_S=0 only 0.216965 /
+//! 0.127591): one PVD=8-dim vector per CURRENT WORD PREFIX, key = word_hash of the letters-only prefix
+//! (tagged id word_hash|1<<40), set on every letter and KEPT after the word ends until the next letter
+//! (the instrument's prefix slot 0). Vectors live in a 2^SBITS tagged table, evict-on-collision, with
+//! the §72 splitmix init. The 8 dims are ordinary inputs to ALL THREE mixers: under BLPVEC=2 the active
+//! mixer width grows from NW to NIN+PVD+1 with the bias moved after the 8 dims (the scratch layout, so
+//! the float summation order matches it); otherwise the loops run over the original NW and the dims do
+//! not exist. Per bit, credit g[k] += e_sel*w_sel[k] + e_sel2*w_sel2[k] + e_g*w_g[k] with PRE-update
+//! weights; at byte end v += LR_S*g, clipped to [-1,1] (LR_S=0 = frozen random-vector control).
+//! BLPVEC=1 is the scratch's global-mixer-only head (§72 placement, own RMSProp head at ALRS), kept for
+//! the record: it was nearly inert. A red-team found the instrument-side gain of such a vector is mostly
+//! RECENCY adaptation that cumulative counts lack; strong only halves both counts at CLIMIT. So:
+//! BLWNS=1 applies the PAQ nonstationary update to the word and previous-word tables (wdc, wdc2): on a
+//! bump with bit y, n_y += 1 with the CLIMIT halving exactly as before, THEN if n_{1-y} > 2,
+//! n_{1-y} = n_{1-y}/2 + 1. BLNSALL=1 (exploratory) applies the same rule to every count table: orders
+//! 0..7, sparse, word, word2 and the hashed high orders (not the ICM StateMap counts). BLPVEC>2 exits.
 
 use std::collections::HashMap;
 use std::env;
@@ -76,6 +95,8 @@ const NICM: usize = 5;               // indirect context models (bit-history -> 
 const ICM_K: [usize; NICM] = [2, 3, 4, 5, 6]; // which ORDERS positions get an ICM
 const NIN: usize = NM + NH + NSP + 4 + NICM; // [orders][hi][sparse..][word][word2][match][match2][icm..] bias
 const NW: usize = NIN + 1; // mixer weights (inputs + bias)
+const PVD: usize = 8; // §79 per-prefix vector dims (BLPVEC)
+const NWMAX: usize = NIN + PVD + 1; // §79 storage width; ACTIVE width nw = NW, or NIN+PVD+1 under BLPVEC=2
 const NSEL: usize = 8 * 256;
 const HBITS: u32 = 22;
 const CLIMIT: u32 = 255;
@@ -129,6 +150,14 @@ fn index_update(w: u64, sbits: u32, semb: &[[f64; SD]], setag: &[u64],
         }
         word_bucket.insert(w, b as u8);
     }
+}
+
+/// §79 PAQ nonstationary rule: after a bump of count pair c[s..s+2] with bit yi (CLIMIT halving
+/// already applied), discount the OPPOSITE count: if n_{1-y} > 2 then n_{1-y} = n_{1-y}/2 + 1.
+#[inline]
+fn ns_discount(c: &mut [u32], s: usize, yi: usize) {
+    let o = s + 1 - yi;
+    if c[o] > 2 { c[o] = c[o] / 2 + 1; }
 }
 
 #[inline]
@@ -261,6 +290,16 @@ fn main() {
     let soft_k = envf("SOFTK", 8.0) as usize;      // §74 retrieved neighbours per byte
     let simmin = envf("SIMMIN", 0.25);             // §74 cosine floor for a neighbour vote
     let nslots: usize = (envf("NSLOTS", 6.0) as usize).clamp(1, SLOTS);   // §75 active LRU depth
+    let blpvec: u32 = envf("BLPVEC", 0.0) as u32;   // §79 per-prefix vector: 0 off, 1 global head, 2 all mixers
+    if blpvec > 2 {
+        eprintln!("error: BLPVEC must be 0, 1 or 2 (got {})", blpvec);
+        std::process::exit(2);
+    }
+    let blwns = env::var("BLWNS").map(|s| s == "1").unwrap_or(false);    // §79 NS rule on wdc/wdc2
+    let ns_all = env::var("BLNSALL").map(|s| s == "1").unwrap_or(false); // §79 NS rule on every count table
+    let ns_w = blwns || ns_all;
+    let nin = if blpvec == 2 { NIN + PVD } else { NIN };  // §79 active mixer inputs (= bias index)
+    let nw = if blpvec == 2 { NWMAX } else { NW };         // §79 active mixer width (= nin + 1)
 
     let mut raw = fs::read(path).expect("read input");
     if cap > 0 && raw.len() > cap { raw.truncate(cap); }
@@ -284,14 +323,14 @@ fn main() {
     // high orders: merged hashed tables (no tags), exactly like the Python
     let mut htab: Vec<Vec<u32>> = (0..NH).map(|_| vec![0u32; 2 * (1usize << HBITS)]).collect();
 
-    let mut mixers = vec![[0.0f64; NW]; NSEL];
-    let mut mixers_g = vec![[0.0f64; NW]; NSEL];
+    let mut mixers = vec![[0.0f64; NWMAX]; NSEL];
+    let mut mixers_g = vec![[0.0f64; NWMAX]; NSEL];
     // a SECOND context-selected mixer, partitioned by order-2 (prev_byte,prev2) instead of order-1
     const NSEL2: usize = 8 * 2048;
-    let mut mixers2 = vec![[0.0f64; NW]; NSEL2];
-    let mut mixers2_g = vec![[0.0f64; NW]; NSEL2];
-    let mut gmix = [0.0f64; NW];
-    let mut gmix_g = [0.0f64; NW];
+    let mut mixers2 = vec![[0.0f64; NWMAX]; NSEL2];
+    let mut mixers2_g = vec![[0.0f64; NWMAX]; NSEL2];
+    let mut gmix = [0.0f64; NWMAX];
+    let mut gmix_g = [0.0f64; NWMAX];
     let mut final_w = [0.3f64, 0.3, 0.2, 0.0]; // [w_sel, w_global, w_sel2, bias]
     let mut final_g = [0.0f64; 4];
     let mut apm1 = Apm::new(256 * 8, 33, 0.007);
@@ -320,6 +359,17 @@ fn main() {
     let mut soft_w = 0.0f64;                           // the head weight into the global mixer
     let mut soft_wg = 0.0f64;                          // RMSProp state for the head
 
+    // §79 per-prefix vector state (tables allocated only when BLPVEC != 0)
+    let pvsz = if blpvec != 0 { 1usize << sbits } else { 1 };
+    let mut pv_tab: Vec<[f64; PVD]> = vec![[0.0f64; PVD]; pvsz];
+    let mut pv_tag: Vec<u64> = vec![0u64; pvsz];
+    let mut pv_id: u64 = 0;                            // current prefix id (0 = no letter seen yet)
+    let mut pv_ti: usize = 0;                          // its table index
+    let mut pv_feat = [0.0f64; PVD];                   // cached vector for the current byte
+    let mut pv_w = [0.0f64; PVD];                      // BLPVEC=1 head weights (global mixer)
+    let mut pv_wg = [0.0f64; PVD];                     // BLPVEC=1 head RMSProp state
+    let mut pv_grad = [0.0f64; PVD];                   // per-byte accumulated credit
+
     let mut hist: Vec<u8> = Vec::with_capacity(raw.len());
     let mut cur: u64 = 0;
     let mut phase: usize = 0;
@@ -329,7 +379,7 @@ fn main() {
     let mut byte_pos: usize = 0;
     let mut htail: u64 = 0;
 
-    let mut sts = [0.0f64; NW];
+    let mut sts = [0.0f64; NWMAX];
     let mut oslot = [0usize; NM];
     let mut oreset = [false; NM];
     // indirect context models: per-context bit-history byte + an adaptive StateMap over the 256 histories
@@ -436,18 +486,21 @@ fn main() {
             icm_bv[c] = bv; icm_ti[c] = ti;
             sts[NM + NH + NSP + 4 + c] = stretch(sm_p[c][bv]);
         }
-        sts[NIN] = 1.0;
+        sts[nin] = 1.0;
+        // §79 BLPVEC=2: the current prefix's vector as 8 ordinary inputs (between the models and the bias)
+        if blpvec == 2 { for k in 0..PVD { sts[NIN + k] = if pv_id != 0 { pv_feat[k] } else { 0.0 }; } }
 
         let sel = ((phase << 8) | prev_byte as usize) & (NSEL - 1);
         let sel2 = ((phase << 11) | ((prev_byte.wrapping_mul(769) ^ prev2.wrapping_mul(2246822519)) as usize & 2047)) & (NSEL2 - 1);
         let mut d = 0.0;
-        for k in 0..NW { d += mixers[sel][k] * sts[k]; }
+        for (w, s) in mixers[sel][..nw].iter().zip(&sts[..nw]) { d += w * s; }
         let p_sel = squash(d);
         let mut d2 = 0.0;
-        for k in 0..NW { d2 += mixers2[sel2][k] * sts[k]; }
+        for (w, s) in mixers2[sel2][..nw].iter().zip(&sts[..nw]) { d2 += w * s; }
         let p_sel2 = squash(d2);
         let mut dg = 0.0;
-        for k in 0..NW { dg += gmix[k] * sts[k]; }
+        for (w, s) in gmix[..nw].iter().zip(&sts[..nw]) { dg += w * s; }
+        if blpvec == 1 && pv_id != 0 { for k in 0..PVD { dg += pv_w[k] * pv_feat[k]; } }
         if use_slots {
             for si in 0..nslots {
                 let f = &slot_feat[si];
@@ -524,28 +577,51 @@ fn main() {
         let e_sel = yf - p_sel;
         let e_sel2 = yf - p_sel2;
         let e_g = yf - p_g;
+        // §79 BLPVEC=2: credit for the prefix vector from all three mixers, PRE-update weights
+        if blpvec == 2 && pv_id != 0 {
+            for k in 0..PVD {
+                pv_grad[k] += e_sel * mixers[sel][NIN + k] + e_sel2 * mixers2[sel2][NIN + k] + e_g * gmix[NIN + k];
+            }
+        }
         {
-            let w = &mut mixers[sel];
-            let wg = &mut mixers_g[sel];
-            for k in 0..NW {
+            let w = &mut mixers[sel][..nw];
+            let wg = &mut mixers_g[sel][..nw];
+            let sts = &sts[..nw];
+            for k in 0..nw {
                 let gk = e_sel * sts[k];
                 wg[k] = RMS_DECAY * wg[k] + ord_ * gk * gk;
                 w[k] += alr_lr * gk / (wg[k].sqrt() + RMS_EPS);
             }
         }
         {
-            let w = &mut mixers2[sel2];
-            let wg = &mut mixers2_g[sel2];
-            for k in 0..NW {
+            let w = &mut mixers2[sel2][..nw];
+            let wg = &mut mixers2_g[sel2][..nw];
+            let sts = &sts[..nw];
+            for k in 0..nw {
                 let gk = e_sel2 * sts[k];
                 wg[k] = RMS_DECAY * wg[k] + ord_ * gk * gk;
                 w[k] += alr_lr * gk / (wg[k].sqrt() + RMS_EPS);
             }
         }
-        for k in 0..NW {
-            let gk = e_g * sts[k];
-            gmix_g[k] = RMS_DECAY * gmix_g[k] + ord_ * gk * gk;
-            gmix[k] += alr_lr * gk / (gmix_g[k].sqrt() + RMS_EPS);
+        {
+            let w = &mut gmix[..nw];
+            let wg = &mut gmix_g[..nw];
+            let sts = &sts[..nw];
+            for k in 0..nw {
+                let gk = e_g * sts[k];
+                wg[k] = RMS_DECAY * wg[k] + ord_ * gk * gk;
+                w[k] += alr_lr * gk / (wg[k].sqrt() + RMS_EPS);
+            }
+        }
+        // §79 BLPVEC=1: train the global-mixer prefix head; credit uses the PRE-update head weight
+        if blpvec == 1 && pv_id != 0 {
+            for k in 0..PVD {
+                let gk = e_g * pv_feat[k];
+                let w_old = pv_w[k];
+                pv_wg[k] = RMS_DECAY * pv_wg[k] + ord_ * gk * gk;
+                pv_w[k] += alr_slot * gk / (pv_wg[k].sqrt() + RMS_EPS);
+                pv_grad[k] += e_g * w_old;
+            }
         }
         // §72: train the slot head on e_g and accumulate EXACT per-bit credit for the vectors
         // (wstate.py semantics: E-credit uses the PRE-update head weight)
@@ -577,6 +653,7 @@ fn main() {
             let s = 2 * oslot[k];
             ocount[k][s + yi] += 1;
             if ocount[k][s + yi] >= CLIMIT { ocount[k][s] = (ocount[k][s] + 1) >> 1; ocount[k][s + 1] = (ocount[k][s + 1] + 1) >> 1; }
+            if ns_all { ns_discount(&mut ocount[k], s, yi); }
         }
         // ICM: adapt the StateMap toward y at the observed history, then shift y into the history byte
         for c in 0..NICM {
@@ -589,21 +666,25 @@ fn main() {
         for j in 0..NSP {
             let s = 2 * sp_slot[j]; spc[j][s + yi] += 1;
             if spc[j][s + yi] >= CLIMIT { spc[j][s] = (spc[j][s] + 1) >> 1; spc[j][s + 1] = (spc[j][s + 1] + 1) >> 1; }
+            if ns_all { ns_discount(&mut spc[j], s, yi); }
         }
         if !strip_w {
             {
                 let s = 2 * wd_slot; wdc[s + yi] += 1;
                 if wdc[s + yi] >= CLIMIT { wdc[s] = (wdc[s] + 1) >> 1; wdc[s + 1] = (wdc[s + 1] + 1) >> 1; }
+                if ns_w { ns_discount(&mut wdc, s, yi); }
             }
             {
                 let s = 2 * wd2_slot; wdc2[s + yi] += 1;
                 if wdc2[s + yi] >= CLIMIT { wdc2[s] = (wdc2[s] + 1) >> 1; wdc2[s + 1] = (wdc2[s + 1] + 1) >> 1; }
+                if ns_w { ns_discount(&mut wdc2, s, yi); }
             }
         }
         if !strip_h {
             for hk in 0..NH {
                 let s = hslot[hk]; htab[hk][s + yi] += 1;
                 if htab[hk][s + yi] >= CLIMIT { htab[hk][s] = (htab[hk][s] + 1) >> 1; htab[hk][s + 1] = (htab[hk][s + 1] + 1) >> 1; }
+                if ns_all { ns_discount(&mut htab[hk], s, yi); }
             }
         }
         apm1.update(yf);
@@ -616,6 +697,15 @@ fn main() {
         cur = (cur << 1) | (y as u64);
         phase += 1;
         if phase == 8 {
+            // §79: apply this byte's accumulated credit to the current prefix vector (v += LR_S*g, clip)
+            if blpvec != 0 && pv_id != 0 {
+                for k in 0..PVD {
+                    let e = pv_tab[pv_ti][k] + lr_s * pv_grad[k];
+                    pv_tab[pv_ti][k] = if e > 1.0 { 1.0 } else if e < -1.0 { -1.0 } else { e };
+                    pv_grad[k] = 0.0;
+                }
+                pv_feat = pv_tab[pv_ti];
+            }
             // §72: apply this byte's accumulated vector credit to each slot's word
             if use_slots {
                 for si in 0..nslots {
@@ -720,6 +810,20 @@ fn main() {
                     word_hash = 0;
                 }
             }
+            // §79: a letter moves the prefix key to the new letters-only prefix; a non-letter KEEPS the
+            // last prefix (the finished word) until the next letter
+            if blpvec != 0 && ((65..=90).contains(&b) || (97..=122).contains(&b)) {
+                let id = word_hash | (1u64 << 40);
+                let ti = (id.wrapping_mul(MULT) >> (64 - sbits)) as usize;
+                if pv_tag[ti] != id {
+                    pv_tag[ti] = id;
+                    let mut sd = id;
+                    let mut v = [0.0f64; PVD];
+                    for k in 0..PVD { v[k] = (splitmix(&mut sd) as f64 / u64::MAX as f64 - 0.5) * 0.1; }
+                    pv_tab[ti] = v;
+                }
+                pv_id = id; pv_ti = ti; pv_feat = pv_tab[ti];
+            }
             prev2 = prev_byte; prev_byte = b as u64; cur = 0; phase = 0; byte_pos += 1;
             if !strip_h {
                 for hk in 0..NH {
@@ -736,8 +840,8 @@ fn main() {
     let whole = tot / n as f64;
     let last = if tailn > 0 { tail / tailn as f64 } else { 0.0 };
     println!("corpus={}  bytes={}  bits={}  obits={}", path, raw.len(), n, obits);
-    println!("  flags: BLSTRIPW={} BLSTRIPH={} BLMSLOTS={} BLSOFT={} NSLOTS={}",
-             strip_w as u8, strip_h as u8, use_slots as u8, blsoft as u8, nslots);
+    println!("  flags: BLSTRIPW={} BLSTRIPH={} BLMSLOTS={} BLSOFT={} NSLOTS={} BLPVEC={} BLWNS={} BLNSALL={} LR_S={}",
+             strip_w as u8, strip_h as u8, use_slots as u8, blsoft as u8, nslots, blpvec, blwns as u8, ns_all as u8, lr_s);
     println!("  blmrs-strong  whole-stream = {:.6}   last-20% = {:.6}  bits/bit   [{:.1}s, {:.1} Mbits/s]",
              whole, last, secs, (n as f64 / 1e6) / secs);
 }

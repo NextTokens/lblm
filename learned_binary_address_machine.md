@@ -3422,6 +3422,10 @@ The §77 re-gate verdicts in this table are seed 0 and one deterministic engine 
 
 ### 77.6 Where this leaves the strain
 
+> **Updated by §78:** the prefix vector's instrument gain is mostly forgetting that the instrument's
+> cumulative counts lack, a scratch all-mixer engine port gains +0.0004–0.0005 bits/bit, and a forced-selection
+> oracle shows the vote works at long gaps once selection is given. See §78.5.
+
 After §69–§77, the only learned memory channel that beat order-n statistics on leak-free held-out data
 was a learned current-prefix vector, which is a word model. Production has a count word model, but the
 learned vector was never tested against one or ported. Whole-word binding failed once measured
@@ -3436,6 +3440,291 @@ remain if anyone reopens it: (1) the vote-readout trap of §77.4 — a forced-se
 into the vote set during training and test, vote weight logged; needs new code) would show whether the
 vote readout works once selection is given; (2) the §72 learned prefix vector against a count word
 model on the same gate, which would settle whether it is anything more than a word model.
+
+---
+
+## 78. The two loose ends — the prefix vector is mostly forgetting, the instrument's counts never forget, and selection is the bottleneck (`wstate.py` §78 arms, `_bind_probe.py --grid78`)
+
+§77.6 left two narrow questions. Both were pre-registered in the code before any run, built with
+self-tests (bit-identity of all 20 legacy arms, causality flips, high-precision gradient checks),
+reviewed by two independent agents with their own re-implementations, then red-teamed after the runs.
+
+### 78.1 §78A — is the §72 learned prefix vector more than a count word model? (pre-registered)
+
+Arms have no EMA state, so they isolate the channel: `wcnt` = orders 0–6 + an exact count expert keyed
+by (slot 0 id, phase, partial byte); `pvec` = orders + the learned 8-dim vector of slot 0; `pvecr` =
+frozen; `wcntpvec` / `wcntpvecr` = both. Gate as §77.2, prefix mode, one slot. A1 = `wcnt` − `wcntpvec`,
+A2 = `wcntpvecr` − `wcntpvec`, each required ≥ +0.002 bpb at every size on code and wt103, then stdlib.
+Outputs `_78a_code.txt`, `_78a_wt103.txt`, `_78a_stdlib.txt`.
+
+| corpus (sizes) | `wcnt` − baseline | `pvec` − baseline | A1 | A2 |
+|---|---|---|---|---|
+| code (100/200/400/585 KB) | +0.0620 +0.0561 +0.0516 +0.0528 | +0.0224 +0.0238 +0.0263 +0.0288 | +0.0219 +0.0240 +0.0272 +0.0297 | +0.0219 +0.0232 +0.0270 +0.0292 |
+| wt103 (150/450/1200/2700 KB) | +0.0298 +0.0257 +0.0235 +0.0205 | +0.0127 +0.0166 +0.0204 +0.0245 | +0.0105 +0.0149 +0.0188 +0.0220 | +0.0106 +0.0150 +0.0186 +0.0217 |
+| stdlib (400/1200/2400 KB) | +0.0478 +0.0392 +0.0366 | +0.0269 +0.0240 +0.0247 | +0.0276 +0.0243 +0.0242 | +0.0266 +0.0235 +0.0235 |
+
+**Pre-registered verdict: A1 and A2 pass on all three corpora.** Frozen vectors add ~0 (`pvecr` −
+baseline −0.0002…+0.0010).
+
+### 78.2 Red-team (post hoc): what the vector carries is forgetting
+
+The mechanism red-team reproduced every number bit-exactly, found no leak (code read, 18/18 bit-flip
+checks, one-byte-delayed credit unchanged), then tested explanations on code 100/200 KB and wt103
+150/450 KB:
+
+- **Every count table in the instrument is cumulative and never forgets** (orders 0–6 and `wcnt`).
+  The learned vector, updated at a constant rate, is an exponentially forgetting per-prefix nudge
+  toward what has *recently* followed that prefix. Its gain sits on bytes whose recent rate is ≥ 2×
+  their long-run rate (+0.12–0.14 bits per such byte) and turns negative where the rate recently
+  dropped; 79–83 % of it is on prefixes seen ≥ 100 times; freezing the vectors during the test removes
+  77–91 % of it; bytes right after a word carry only 8–9 %.
+- **With the standard PAQ nonstationary count rule** (on each update the opposite count, if > 2,
+  becomes n/2 + 1) on all tables, A1 falls to +0.0031 +0.0027 +0.0030 +0.0028 on code and
+  +0.0004 +0.0006 +0.0015 +0.0026 on wt103 — **failing the +0.002 bar on wt103 at 150, 450 and 1200 KB.**
+  A fast learned scalar per prefix recovers 73–82 % of A1; confidence or pooled count features add nothing.
+- **The instrument's orders-only rail is 0.13–0.37 bpb weak.** The same orders with nonstationary counts:
+  code 2.1948 → 1.9172, 1.9731 → 1.6736, 2.0504 → 1.7153, 2.1037 → 1.7349; wt103 2.3675 → 2.2411,
+  2.2758 → 2.1156, 2.3715 → 2.1722, 2.4793 → 2.2531. **Every instrument "crossing" in §70–§78 was
+  measured against this non-forgetting rail.** Any further instrument claim must use nonstationary
+  counters in the baseline and in the arm.
+
+**Corrected §78A reading:** A1/A2 pass as pre-registered, but the learned prefix vector is mostly
+recency adaptation that cumulative counts lack. The reading "it carries something a count word model
+cannot" is retired.
+
+### 78.3 Red-team (post hoc): the engine absorbs it only under the §72 placement — and a scratch port gains
+
+The absorption red-team rebuilt strong's mixer stack and APM chain in the instrument (code 100/200 KB,
+wt103 150/450 KB):
+
+- Word-keyed SSE (an APM5 copy, even with exact keys) absorbs none of A1 (77–105 % kept).
+- strong's own context-selected mixers (by phase + previous byte, and by phase + order-2 hash) absorb a
+  vector fed to the global mixer only: 1–12 % of A1 survives. This is why a §72-placement port is inert.
+- **Fed to all three mixers, the margin returns at 119–162 % of A1**, and learning beats frozen vectors.
+
+A scratch port of that placement (`BLPVEC=2`: key = current letters-only prefix kept through delimiters
+until the next letter; 8 inputs to all three mixers; credit = each mixer's own error × its pre-update
+weight; `v += LR_S·g`; untuned defaults) gave, whole-stream bits/bit:
+
+| corpus | baseline | `BLPVEC=2` | gain | frozen (`LR_S=0`) gain |
+|---|---|---|---|---|
+| corpus_big 11 MB (obits 25) | 0.217011 | 0.216509 | +0.000502 | +0.000046 |
+| stdlib.bin 10.6 MB (obits 25) | 0.127624 | 0.127204 | +0.000420 | +0.000033 |
+| corpus_big without word models | 0.220255 | 0.219417 | +0.000838 | — |
+| stdlib without word models | 0.129935 | 0.129275 | +0.000660 | — |
+
+The global-only placement was +0.00004…+0.0001 at 0.3–2.8 MB. The gain is ~10× the §77.3 whole-word
+slot result and meets the §72 port rule (beat 0.217011), but it is a scratch binary, one configuration
+per corpus, copy ON and not decontaminated. Given §78.2, it may be a crude adaptive-rate effect that a
+better counter rule gives more cheaply. **§79 builds it in the repo with forgetting controls and a third
+corpus, criteria written before the runs.**
+
+### 78.4 §78B — forced-selection oracle for the §77 vote trap (pre-registered)
+
+`attnorc1` forces the vote set to the cue's slot; `attnorc4` forces the cue plus the 3 other top-attended
+slots. Same probe data and protocol as §77.4. Gain in bits per outcome word vs baseline (bound ≈ 3);
+output `_78b_probe.txt`.
+
+| arm | G=2 s7 | G=2 s8 | G=12 s7 | G=12 s8 | G=24 s7 | G=24 s8 |
+|---|---|---|---|---|---|---|
+| `attn` (reference) | −0.044 | −0.003 | −0.011 | +0.007 | −0.019 | −0.043 |
+| `attnorc1` (cue only) | +2.853 | +2.827 | +2.459 | +2.485 | +2.456 | +2.515 |
+| `attnorc4` (cue + 3) | +1.800 | +1.884 | +0.399 | +0.524 | +0.503 | +0.569 |
+
+**Verdict: B1 PASS (cue-only gain ≥ 1.5 at G=12/24), B2 PASS (its vote weight > 0 in all four cells),
+B3 FAIL (cue + 3 < 1.0).** The vote store and readout work at long gaps once selection is given;
+selection is the bottleneck.
+
+**Corrected B3 reading (red-team, post hoc; supersedes the line the probe auto-printed):** `attnorc4`'s
+vote weight is positive in 6/6 cells, so distractors in the vote set do not create the negative-weight
+trap. Its loss is dilution: at G=12/24 the cue holds ≈0.30 of the weight inside the vote set, and a
+renormalised stretch average scaled by one global mixer weight (pinned by the other ~99 % of bits)
+cannot undo it. With distractor stretches zeroed, pure dilution predicts first-byte gains of +0.43 /
++0.61 at G=12/24 (seed 7) against +0.40 / +0.50 observed. `attn`'s negative weight has a different
+source: its vote set almost never contains the cue, so the cue's cell never trains and every member
+votes at chance.
+
+### 78.5 What changes
+
+- §77.6's closure stands for word binding, but two measured leads replace "no target": a production
+  port of the learned prefix vector at all-mixer placement (§78.3), and a responsibility-trained
+  mixture-of-experts gate that combines votes in probability space so no shared mixer weight can dilute
+  or reverse selection (§78.4). Both are pre-registered in §79.
+  (The §78.4 lead's criteria were registered in `_bind_probe.py`, not in §79 of this ledger.)
+- **Instrument hygiene:** nonstationary counters are now a required control for any instrument claim.
+
+---
+
+## 79. Pre-registration (written 2026-09-14 before any §79 run)
+
+### 79A — the learned prefix vector in the production engine (`strong.rs` `BLPVEC=2`, `BLWNS`, `BLNSALL`)
+
+Build reviewed with no blockers (sign toy, 19.2 M credit finite-difference checks, key re-derivation on
+every byte, nonstationary rule checked on every bit, 15-digit bit-identity of defaults and older flags,
+lookahead flips). Grid: whole-stream bits/bit, obits 25, on corpus_big 11 MB, stdlib.bin 10.6 MB and the
+first 30 MB of enwik8. Arms: base; `BLPVEC=2`; `BLPVEC=2 LR_S=0`; `BLWNS=1`; `BLWNS=1 BLPVEC=2`;
+`BLNSALL=1`; `BLNSALL=1 BLPVEC=2`. Outputs `_79a_*.txt`.
+
+- **Q1 gain:** `BLPVEC=2` beats base by ≥ 0.0003 bits/bit on all three corpora.
+- **Q2 learning:** the frozen arm's gain is < 1/3 of the learned arm's gain on all three corpora.
+- **Q3 more than word-model forgetting:** (`BLWNS=1`) − (`BLWNS=1 BLPVEC=2`) ≥ 0.0002 on all three corpora.
+- **Exploratory, no gate:** `BLNSALL=1` with and without `BLPVEC=2`.
+- **Reading:** Q1–Q3 pass → the learned prefix vector is a production improvement beyond cheaper forgetting.
+  Q1 and Q2 pass but Q3 fails → if `BLWNS=1` alone gains at least as much as `BLPVEC=2`, the cheaper
+  forgetting rule is the improvement to adopt instead. Q1 fails → the scratch result does not hold at the
+  third corpus or in the repo build. No default is changed in this section either way.
+
+---
+
+### 79A result (runs finished before 79H was written)
+
+| corpus | base | `BLPVEC=2` | frozen | `BLWNS=1` | `BLWNS=1 BLPVEC=2` | `BLNSALL=1` | `BLNSALL=1 BLPVEC=2` |
+|---|---|---|---|---|---|---|---|
+| corpus_big 11 MB | 0.217011 | 0.216509 | 0.216965 | 0.215843 | 0.215536 | 0.216431 | 0.216158 |
+| stdlib.bin 10.6 MB | 0.127624 | 0.127204 | 0.127591 | 0.125273 | 0.125011 | 0.124459 | 0.124261 |
+| enwik8 first 30 MB | 0.205801 | 0.204973 | 0.205728 | 0.203368 | 0.202723 | 0.203764 | 0.203139 |
+
+Q1 PASS (+0.000502 / +0.000420 / +0.000828). Q2 PASS (frozen/learned 0.092 / 0.079 / 0.088).
+Q3 PASS (+0.000307 / +0.000262 / +0.000645). Pre-registered reading: the learned prefix vector is a
+production improvement beyond cheaper forgetting. The forgetting control itself (`BLWNS=1`, the PAQ
+nonstationary rule on the word and previous-word tables) is a larger gain than `BLPVEC=2`'s: +0.001168 /
++0.002351 / +0.002433. Outputs `_79a_*.txt`.
+
+### 79H — held-out confirmation (written 2026-09-14 17:52, before any 79H run)
+
+The three 79A corpora shaped the idea, so the adoption decision uses data that played no part in it:
+the last 30 MB of enwik8 (`data/enwik8_tail30`, obits 25), the E. coli genome as letters
+(`data/ecoli.txt`, 4.6 MB, obits 25), this repository's own Python and Rust source
+(`data/repo_code.txt`, 770 KB, obits 24, not Python-stdlib text), and the full 100 MB enwik8 headline
+(obits 25). Arms: base, `BLWNS=1`, `BLWNS=1 BLPVEC=2`. Outputs `_79h_*.txt`.
+
+- **H1 forgetting:** `BLWNS=1` beats base by ≥ 0.0005 bits/bit on all four corpora.
+- **H2 vector on top:** `BLWNS=1 BLPVEC=2` beats `BLWNS=1` by ≥ 0.0002 on enwik8 tail, repo code and full
+  enwik8 (DNA exploratory: its letters-only "words" are whole lines).
+- **H3 safety:** neither flag is worse than base by more than 0.0002 on any corpus.
+- **Reading:** H1 and H3 pass → recommend `BLWNS=1` as the new default. H1, H2 and H3 pass → recommend
+  `BLWNS=1 BLPVEC=2`. Defaults change only in a separate, reviewed commit.
+
+---
+
+### 79A timing correction (post hoc)
+
+"Before any §79 run" holds only for the 79A grid, which launched at 16:45:10, four seconds after these
+criteria were written. Before that, the builder and reviewer had run all seven 79A arms at 300 KB
+(corpus.txt, obits 23: base 0.231704, `BLPVEC=2` 0.231420, frozen 0.231684, `BLWNS=1` 0.231576,
+`BLWNS=1 BLPVEC=2` 0.231368, `BLNSALL=1` 0.233588, `BLNSALL=1 BLPVEC=2` 0.233453), and the §79B smoke
+probe had run at 16:30. The corpus_big and stdlib `BLPVEC=2` and frozen values equal §78.3's scratch
+results to six digits. Q1 and Q2 are therefore new evidence only on enwik8's first 30 MB; Q3 is new on all
+three corpora. `BLWNS=1` is a larger gain than `BLPVEC=2`'s on all three corpora (on stdlib `BLNSALL=1`
+is larger still).
+
+### 79H result
+
+| corpus | base | `BLWNS=1` | `BLWNS=1 BLPVEC=2` | H1 gain | H2 gain |
+|---|---|---|---|---|---|
+| full enwik8 100 MB | 0.199145 | 0.196841 | 0.196123 | +0.002304 | +0.000718 |
+| enwik8 last 30 MB | 0.204666 | 0.202230 | 0.201627 | +0.002436 | +0.000603 |
+| repo code 770 KB (obits 24) | 0.185380 | 0.182759 | 0.182558 | +0.002621 | +0.000201 |
+| E. coli 4.6 MB | 0.240340 | 0.240340 | 0.240341 | +0.000000 | −0.000001 (exploratory) |
+
+**H1 FAIL** (DNA +0.000000 < 0.0005; it holds on the three text and code corpora). **H2 PASS**
+(+0.000718 / +0.000603 / +0.000201; the code margin over 0.0002 is about 1e-6, a marginal pass).
+**H3 PASS** (worst case `BLWNS=1 BLPVEC=2` on DNA, 0.000001 worse than base; neither tested arm is worse
+by more than 0.0002). **Both pre-registered readings need H1, so neither fires, and no default is
+recommended by this section. Any decision to adopt `BLWNS=1`, with or without `BLPVEC=2`, is post hoc.**
+
+Corrections to the 79H text: `data/ecoli.txt` has no newlines and only A/C/G/T, so its one letters-only
+"word" is the whole 4,641,652-byte file, not whole lines. Full enwik8 contains the 79A first 30 MB (30 %
+of its bytes), so it is not held out; the clean held-out evidence is the enwik8 tail, repo code and DNA
+(repo code shares 0/500 sampled 100-byte windows with the earlier code corpora). In compressed size, full
+enwik8 goes from 19.91 MB to 19.68 MB (`BLWNS=1`) and 19.61 MB (both). Outputs `_79h_*.txt`.
+
+### 79R — red-team of the engine result (post hoc)
+
+- **Why DNA is exactly zero.** With no non-letter byte, `word_hash` never resets and becomes a rolling
+  hash of the whole file prefix; 99.1 % of byte-level keys are distinct, word-table counts never exceed 4,
+  and the nonstationary rule's condition was met 0 times in 37.1 M bits (text: 0.155 per bit). `BLWNS=1`
+  is identical to base to 6 decimals by construction; `BLPVEC=2` sees a fresh random vector on 99.4 % of
+  bytes. The H1 failure records that the gate included a corpus where the flag cannot act, not that
+  forgetting fails or harms DNA statistics. Post hoc, on 6-mer-tokenised DNA (not held out) the rule does
+  act (0.128 discounts per bit) but gains only +0.000107, about 24× less than text at the same size.
+- **Not a memory effect.** The vector table is 2^SBITS entries (302 MB at the default 22). At matched or
+  better memory for the baseline:
+
+| corpus | `BLWNS=1` obits 25 | `BLWNS=1` obits 26 (+4.1 GB) | `+BLPVEC=2` SBITS 16 (+4.7 MB) | SBITS 18 (+19 MB) | SBITS 22 (+302 MB) |
+|---|---|---|---|---|---|
+| corpus_big | 0.215843 | 0.215714 | 0.215634 | 0.215567 | 0.215536 |
+| stdlib | 0.125273 | 0.125206 | 0.125036 | 0.125015 | 0.125011 |
+
+  A 4.7 MB vector table beats doubling every count table, and keeps 68 % / 90 % of the full gain.
+- **Real, decodable compression.** Every update uses only already-coded bits (code audit; a flipped later
+  byte leaves all earlier probabilities bit-identical). A copy with a 32-bit arithmetic coder encoded and
+  decoded all of corpus_big back to identical bytes: `BLWNS=1` 2,384,018 bytes, `BLWNS=1 BLPVEC=2`
+  2,380,617 bytes — 3,401 bytes saved against 3,393 predicted. Decoding needs the same binary or pinned
+  floating-point build; a portable decoder is not guaranteed.
+- **Speed.** `BLWNS=1` has no measurable cost; `BLPVEC=2` costs +1.3 % encode / +1.5 % decode in a paired
+  measurement (grid wall times are ±5 % noise from concurrent runs).
+
+### 79B — a responsibility-trained mixture-of-experts gate (`attnmoe`, pre-registered in the `_bind_probe.py` docstring before the §79 smoke and grid, not in this ledger) and its amendment (`attnmoe_fc`, `attnmoe_fcnb`)
+
+Design (from the §78 red-team): every non-empty slot is a vote expert; a learned gate prior g over slots;
+votes combined in probability space with within-byte posterior weights, so the product over a byte equals
+Σ g_k P_k(byte) exactly; the gate trained by g_k − r_k from byte-end responsibilities, never through the
+mixer weight. Checks before any grid: 60-digit finite differences of the gate credit (worst 1.6e-12 across
+the three arms), exactness of the mixture (6e-15), a one-hot oracle gate reproducing the §78B cue-only gain
+within 0.03 bit, causality flips, bit-identity of all 27 older arms, and an independent reviewer
+re-implementation. Outputs `_79_probe.txt`, `_79b_probe.txt`. Gain in bits per outcome word vs baseline
+(bound ≈ 3).
+
+| arm | G=2 s7 | G=2 s8 | G=12 s7 | G=12 s8 | G=24 s7 | G=24 s8 |
+|---|---|---|---|---|---|---|
+| `attnorc4` (forced cue + 3, reference) | +1.800 | +1.884 | +0.399 | +0.524 | +0.503 | +0.569 |
+| `attnmoe` (registered) | −0.094 | −0.056 | −0.044 | −0.031 | −0.019 | −0.032 |
+| `attnmoe_uni` (uniform gate control) | −0.023 | −0.020 | −0.187 | −0.181 | −0.254 | −0.274 |
+| `attnmoe_fc` (amendment: full-weight counts) | −0.040 | −0.056 | −0.042 | +0.010 | −0.022 | −0.027 |
+| `attnmoe_fcnb` (amendment: full counts, no gate bias) | −0.005 | −0.013 | −0.123 | −0.129 | −0.097 | −0.134 |
+| `attnmoe_uni_fc` (amendment control) | −0.032 | +0.002 | −0.075 | −0.070 | −0.091 | −0.110 |
+
+**Registered verdict: M1–M4 FAIL in every cell; kill rule fired.** The builder and the reviewer both flagged
+it before the grid. In the reviewer's run (G=24 seed 8) the gate locked within ~25 training sentences onto
+one fixed distractor word ("golf", weight ≈ 0.99) whatever the query, because the gate bias alone selected
+it and responsibility-weighted counts starved the cue's own vote cells. In the grid the max gate weight was
+0.989–0.998 at G=12/24 and the cue's gate prior was < 0.0001 in all four cells.
+
+**Amendment (labelled; designed after that diagnosis).** Its criteria (M1b–M4b and the kill rule, word for
+word as in `_bind_probe.py`, which adds one clarifying line on M2b's definitions) were fixed in the
+orchestrator's brief at 17:09:55, before the first §79 grid result (17:12:29). They were inserted into
+`_bind_probe.py` at 17:16:18, five seconds after the §79 verdict, and before the §79b smoke (17:31) and grid
+(17:55). Only the session transcript timestamp shows that they came before the grid results. Already run
+before the brief: the §79 smoke (attnmoe on the first 20 test sentences of G=12 seed 7), K1 (300 training
+sentences) and K3 (baseline and the oracle gate on the full G=12/24 test sets). **M1b–M4b FAIL for both arms;
+kill rule fired.** Full-weight counts stopped the single-word collapse, but `attnmoe_fc` gave the max gate
+weight to "golf" or "india" in 73.5–99 % of G=12/24 outcomes ("then" 19–25 % at G=12; mean max weight
+0.32–0.42), and `attnmoe_fcnb` ranked the cue first in 30–36.5 % of G=12 outcomes (0 % at G=24) while giving
+it only 0.033–0.054 of the weight (uniform 0.031). In the amended arms and both uniform-gate controls, the
+mixer weight on the combined vote at the end of training ends negative in all six cells (−0.75…−2.05; the
+registered arm −0.22…−0.69): a probability-space mixture over 32 mostly-distractor experts is a signal the
+mixer learns to oppose, so a correct cue never gets enough weight to pay.
+
+**Reading, scoped.** Across §77.4, §78B and §79B, the store works (a hand-given cue slot recovers ~2.5 of 3
+bits at 24 words), and every learned way of choosing that slot tested so far failed: softmax attention,
+cosine attention, a responsibility gate, and that gate with its two diagnosed loops removed. All of them
+built the query from slot 0, which holds "then" at 100 % of outcome first bytes, so the query was the same
+for every sentence at the deciding byte. The closure covers these gates and this query construction at this
+data scale, not learned selection in general.
+
+### 79.6 Where this leaves the strain
+
+- **The one production improvement of the §72–§79 arc is plain forgetting in the word models**, with the
+  learned prefix vector adding a smaller, memory-independent amount: full enwik8 0.199145 → 0.196123
+  (−1.5 %), verified decodable. It came from the §78 red-team asking why the instrument's vector helped,
+  not from the intelligence track's own thesis. The pre-registered adoption rule did not fire (H1 failed on a
+  corpus where the flag cannot act), so turning either flag on by default is a post-hoc decision for the
+  project owner, made in a separate, reviewed commit.
+- **The instrument's cumulative counters are a weak rail** (§78.2); nonstationary counters are required in
+  any future instrument claim.
+- **Learned long-range selection is closed for the tested gates.** A different query source (not slot 0)
+  is the only untested lever the audit identified.
 
 ---
 

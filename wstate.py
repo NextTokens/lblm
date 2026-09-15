@@ -80,6 +80,96 @@ attention, served once per byte (forward at byte end, after the LRU update):
   SS77 RESULT: the long-gap probe (_bind_probe.py) killed the attention arms -- no content arm binds a
   cue at any gap; the vote's mixer weight settles negative, so correct votes hurt (ledger SS77.4).
 
+v8 (§78A, IS THE §72 CHANNEL MORE THAN A COUNT WORD MODEL?): §77 showed the §72 "win" is a learned SD=8 vector
+for slots[0], which under WSLOTMODE=prefix is the growing current prefix at letter bytes and the last completed
+word after a non-letter byte (until the next letter). It was only ever compared with an orders-only baseline.
+New arms, ALL with use_state=False (no M=32 EMA, no bucket expert) so they isolate the channel; each = orders
+0..6 plus (inputs at an explicit per-model base, NOT the legacy NM+M+1: self.fbase = NM, the vector dims at
+self.pbase, the count expert at self.cbase):
+    wcnt      : ONE exact count expert keyed (slots[0] id, phase, partial byte) in a dict (no hashing, no
+                collisions), stretch((n1+0.2)/(n0+n1+0.4)), updated only when learn     -> a COUNT word model
+    pvec      : the learned SD=8 vector of slots[0] fed as 8 mixer features, trained by the same exact per-bit
+                credit as the legacy 'slots' arm (predict-time mixer weight, applied at byte end, lr_s, clip +-1;
+                applied only when learn)                                               -> the §72 channel, no EMA
+    pvecr     : pvec with vectors FROZEN                                               -> extra-dims control
+    wcntpvec  : wcnt + pvec
+    wcntpvecr : wcnt + pvecr
+  slots[0] follows the existing slot LRU with the arm's S (WSLOTMODE=prefix WSLOTS=1 for §78A). Empty slot ->
+  zero vector features; the count expert keys id 0 as a normal key.
+  report() prints wcnt-vs-baseline, pvec-vs-baseline, A1 = wcnt - wcntpvec, A2 = wcntpvecr - wcntpvec.
+  PRE-REGISTERED (written here before any corpus run):
+  Gate as §77.2 (copy OFF, 13-byte decontamination, deterministic mask), WSLOTMODE=prefix WSLOTS=1, seed 0.
+  Corpora/sizes: code 100,200,400,585 KB; wt103 150,450,1200,2700 KB.
+  A1: wcnt - wcntpvec >= +0.002 bpb at every size on both corpora (the learned vector adds beyond a count word model).
+  A2: wcntpvecr - wcntpvec >= +0.002 bpb at every size on both corpora (the addition is learning, not extra dims).
+  If A1 and A2 both pass: confirm on stdlib 400,1200,2400 KB with the same two criteria. (Seeds do not vary these arms: no seeded init.)
+  Verdict: A1 and A2 (and stdlib) -> the learned prefix vector carries something a count word model does not; else it is a word model and
+  the §72 channel is fully explained.
+  SS78 RESULT: A1/A2 passed on code, wt103 and stdlib, but a red-team showed the gain is mostly recency adaptation that the
+  cumulative (never-forgetting) counts lack; with nonstationary counts A1 fails on wt103 at 150-1200 KB (not re-run on stdlib; ledger SS78.2).
+
+v8b (§78B, FORCED-SELECTION ORACLE for the §77.4 vote-readout trap -- DIAGNOSTIC arms with an EXTERNAL HINT,
+used ONLY by _bind_probe.py): identical to attn in every respect except the vote set T. They read
+model.oracle_wid, an attribute the probe sets (default 0 = no oracle) to the id of the word it wants selected
+(the sentence's cue). The hint comes from outside the byte stream, so these arms are not stand-alone predictors.
+    attnorc1 : T = {the slot holding oracle_wid} with renormalised weight 1 (vote = that slot's stretch); if
+               oracle_wid is 0 or not in the slots, T is empty and the vote feature is 0 for that byte
+               (counted: model.orc_absent out of model.orc_served attention-served bytes, both oracle arms)
+    attnorc4 : T = {oracle slot} plus the top-(WTOPM-1) other slots by attention weight a (top-3 at the default
+               WTOPM=4), renormalised over T as in attn; if absent, T = top-WTOPM by a exactly as attn
+  Credit is attn's exact credit with the forced T held fixed (for attnorc1 the vote term gives no attention
+  gradient since s_k - v = 0; its pooled-feature credit is attn's).
+
+v9 (§79, RESPONSIBILITY-GATED MIXTURE OF VOTE EXPERTS -- the §78B follow-up): §78B showed that forcing the vote set to the
+cue slot binds (attnorc1 +2.46..+2.52 bits at G=12/24) while cue + 3 attended slots (attnorc4) only reaches +0.40..+0.57:
+a renormalised stretch average dilutes the cue's vote behind one scalar mixer weight, and attn's own T rarely holds the
+cue, so the cue's vote cells never train (chicken-and-egg). These arms replace attn's top-m stretch vote with an exact
+probability-space mixture whose gate is trained by the mixture's own responsibilities. Word mode, WSLOTS=32; use_state
+and every non-vote part (EMA state, bucket expert, SD pooled features r) as attn. Arms:
+    attnmoe     : (1) candidates = ALL non-empty slots (no top-m). Slot word k owns a vote expert
+                      p_k(bit=1) = (n1+0.2)/(n0+n1+0.4), cell = attn's vote key/hash (word_k, order-WVORD ctx, phase,
+                      partial) in a FLOAT count table (2 * 2^WVBITS doubles; attn's uint16 table is not allocated).
+                  (2) gate prior g = softmax(e), e_k = q.E_k + beta_k, q = Wq E_0 + bq, exactly attn's dot-product score.
+                  (3) probability-space combination with within-byte posterior weights: at the byte's first bit
+                      w_k = g_k; p_moe(bit j = 1) = sum_k w_k p_k(1); after the bit's value y is seen
+                      w_k <- w_k p_k(y) / sum_i w_i p_i(y)   (p_k(0) = 1 - p_k(1)). Hence prod_j p_moe(b_j) =
+                      sum_k g_k P_k(byte) exactly, and the posterior after bit 8 is r_k = g_k P_k / sum_i g_i P_i. The mixer
+                      gets ONE feature stretch(p_moe) (genmem.stretch, clip 1e-6) at attn's vote position NM+M+1+SD;
+                      the SD pooled features are r = sum_k g_k E_k (attn's, with a = g).
+                  (4) gate credit at byte end (serving slots, before the LRU update), when learn: the mixture's own byte
+                      loss -ln sum_k g_k P_k gives dL/de_k = g_k - r_k; the pooled features add attn's exact mixer credit
+                      (dL/dr per bit at predict-time mixer weights) through the SAME softmax, so
+                          de_k = (g_k - r_k) + g_k (Gr.E_k - sum_i g_i Gr.E_i),
+                      backpropagated exactly as attn's _attn_grads: dq = sum_k de_k E_k, dbeta_k = de_k, dWq = dq c^T,
+                      dbq = dq, dE_k = g_k Gr + de_k q, dE_0 += Wq^T dq. The p_moe feature's own mixer gradient is NOT
+                      propagated to the gate (the responsibility term replaces it). lr_head for Wq/bq/beta (clip +-8),
+                      lr_s for vectors (clip +-1), as attn.
+                  (5) soft expert counts, when learn, at every bit: after the posterior update of (3) (which includes the
+                      bit just seen), each candidate's cell gets n_{k,y} += rho_k with rho_k = that running posterior
+                      w_k p_k(y) / sum_i w_i p_i(y) (so bit 8 uses exactly the byte responsibility r_k; earlier bits use the
+                      posterior given the byte's bits so far, which is what is known when the cell is written). Halving as
+                      attn: if n_{k,y} + rho_k >= 255 then n_{k,y} = (n_{k,y} + rho_k)/2 and n_{k,1-y} = n_{k,1-y}/2 (exact float
+                      halving; attn's integer rule rounds up). Candidates with rho_k == 0.0 are skipped (an exact no-op).
+    attnmoe_uni : identical, but g frozen at 1/n over the n non-empty slots (no gate parameters are used or learned;
+                  vectors learn through r = mean E with dE_k = Gr/n; (3) and (5) unchanged)      -> GATE-LEARNING control
+    attnmoe_orc : identical, but g = one-hot on the slot holding model.oracle_wid (uniform 1/n if 0 or absent; counted in
+                  orc_served/orc_absent like v8b); gate frozen; dE_k = g_k Gr. DIAGNOSTIC (external hint), used only for the
+                  §79 pre-build check that a one-hot gate reproduces attnorc1 (whose vote cells get +1 per bit, like rho=1 here).
+  Diagnostics kept for the probe: at_a = g, at_T = all candidate positions, mo_rlast = the served byte's final posterior r.
+
+v9b (§79b AMENDMENT, made after the pre-grid collapse diagnosis of the registered attnmoe, before any §79 test-set result was
+seen): the registered attnmoe gate collapsed within ~25 training sentences onto one fixed distractor word (g ~ 0.99 whatever the
+query). Reviewer diagnosis: q ~ bq selects a fixed word (bq.E_word ~ +9..+12 vs the query term ~ -0.3), and responsibility-
+weighted soft counts starve the cue expert (its first-outcome-byte cells cost 5.3-7.6 bits vs 2.8-4.2 for the collapsed word), so
+r_cue < g_cue pushes the cue further down. Three amended arms (word mode, WSLOTS=32), identical to attnmoe unless stated:
+    attnmoe_fc     : expert counts are FULL-WEIGHT and gate-independent: at every bit, when learn, EVERY candidate k's cell gets
+                     n_{k,y} += 1.0 (same exact float halving: if n_{k,y} + 1.0 >= 255 then n_{k,y} = (n_{k,y} + 1.0)/2 and
+                     n_{k,1-y} = n_{k,1-y}/2). The within-byte posterior, the p_moe feature, the byte-end responsibilities r and
+                     the gate credit de_k = (g_k - r_k) + pooled credit are unchanged. Gate q = Wq E_0 + bq as attnmoe.
+    attnmoe_fcnb   : attnmoe_fc with bq fixed at 0 and never learned (q = Wq E_0; _attn_grads returns dbq = None, no bq update).
+    attnmoe_uni_fc : g frozen at uniform 1/n (as attnmoe_uni), full-weight counts as attnmoe_fc  -> control for both amended arms.
+  Every pre-existing arm (attnmoe, attnmoe_uni, attnmoe_orc included) is bit-identical to v9.
+
 Words: maximal [A-Za-z0-9] runs, lowercased, FNV-1a rolling hash -> id (prefix-visible, like
 the core's word model). id 0 (no active word) -> zero embedding. The EMA of word embeddings is
 a running TOPIC vector -- long-range structure no order-n byte table represents.
@@ -132,8 +222,28 @@ SLOTMODE = os.environ.get("WSLOTMODE", "prefix")
 assert SLOTMODE in ("prefix", "word"), SLOTMODE
 GP = [GAMMA ** k for k in range(256)]   # precomputed recency discounts
 PROJ_ARMS = ("proj", "projr", "projscr")
-ATTN_ARMS = ("attn", "attnr", "attnrec", "attnscr", "attncos")   # SS77: attentional read over the slot LRU
-ATTN_READ_ARMS = ("attn", "attnr", "attnrec", "attncos")         # the non-floor attention arms
+ATTN_ARMS = ("attn", "attnr", "attnrec", "attnscr", "attncos",
+             "attnorc1", "attnorc4",
+             "attnmoe", "attnmoe_uni", "attnmoe_orc",
+             "attnmoe_fc", "attnmoe_fcnb", "attnmoe_uni_fc")     # SS77: attentional read over the slot LRU
+ATTN_READ_ARMS = ("attn", "attnr", "attnrec", "attncos",
+                  "attnorc1", "attnorc4",
+                  "attnmoe", "attnmoe_uni", "attnmoe_orc",
+                  "attnmoe_fc", "attnmoe_fcnb", "attnmoe_uni_fc")  # the non-floor attention arms
+ORACLE_ARMS = ("attnorc1", "attnorc4",     # §78B: forced vote set from model.oracle_wid (diagnostic, external hint)
+               "attnmoe_orc")              # §79: one-hot gate from model.oracle_wid (diagnostic, external hint)
+MOE_ARMS = ("attnmoe", "attnmoe_uni", "attnmoe_orc",   # §79: responsibility-gated mixture of per-slot vote experts
+            "attnmoe_fc", "attnmoe_fcnb", "attnmoe_uni_fc")   # §79b amendment arms
+MOE_FIXED_GATE = ("attnmoe_uni", "attnmoe_orc",        # §79: gate not a function of learned parameters
+                  "attnmoe_uni_fc")
+MOE_RESP_ARMS = ("attnmoe", "attnmoe_fc", "attnmoe_fcnb")   # §79/§79b: learned gate trained by g_k - r_k
+MOE_FC_ARMS = ("attnmoe_fc", "attnmoe_fcnb", "attnmoe_uni_fc")   # §79b: full-weight, gate-independent expert counts
+MOE_NOBQ_ARMS = ("attnmoe_fcnb",)                      # §79b: bq fixed at 0, never learned
+# §78A: the slots[0] channel in isolation (use_state=False; orders 0..6 + these inputs only)
+W78_ARMS = ("wcnt", "pvec", "pvecr", "wcntpvec", "wcntpvecr")
+CNT_ARMS = ("wcnt", "wcntpvec", "wcntpvecr")         # exact count expert keyed (slots[0], phase, partial)
+PVEC_ARMS = ("pvec", "pvecr", "wcntpvec", "wcntpvecr")   # slots[0]'s SD-dim vector as mixer inputs
+PVEC_LEARN_ARMS = ("pvec", "wcntpvec")               # ... trained by the exact per-bit credit (others frozen)
 KAPPA = float(os.environ.get("WKAPPA", "8.0"))           # SS77c: attncos fixed cosine scale
 TOPM = int(os.environ.get("WTOPM", "4"))                 # SS77: vote over the top-m attended slots
 VORD = int(os.environ.get("WVORD", "3"))                 # SS77: vote context order (bytes)
@@ -176,7 +286,7 @@ def clean_mask_det(train, test, K=13):
 class Model:
     def __init__(self, arm="baseline", lr=0.004, lr_rec=0.02, lr_emb=0.03, lr_s=0.02, lr_head=0.02, seed=0):
         self.arm = arm
-        self.use_state = arm not in ("baseline", "matchbase")
+        self.use_state = arm not in ("baseline", "matchbase") and arm not in W78_ARMS
         self.use_match = arm in MATCH_ARMS     # §75 reconciliation arms: copy ON in the instrument
         self.lr, self.lr_rec, self.lr_emb, self.lr_s, self.lr_head = lr, lr_rec, lr_emb, lr_s, lr_head
         self.NM = len(ORDERS)
@@ -192,6 +302,19 @@ class Model:
             self.NIN += 1                                          # word-expert feature
         if arm in ("semsim", "semfast"):
             self.NIN += S                                          # coherence dot features
+        if arm in W78_ARMS:
+            # §78A: explicit feature base (no state block, so NOT the legacy NM+M+1):
+            #   [orders 0..6][slots[0] vector SD (PVEC_ARMS)][count expert 1 (CNT_ARMS)][bias]
+            self.fbase = self.NIN
+            self.pbase = self.fbase
+            if arm in PVEC_ARMS:
+                self.NIN += SD
+            self.cbase = self.NIN
+            if arm in CNT_ARMS:
+                self.NIN += 1
+            self.wctab = {}                    # (slots[0] id, phase, partial) -> [n0, n1], exact keys
+            self.pv = None                     # slots[0]'s vector (the list in semb), refreshed at byte end
+            self.wcount = {}                   # word id -> _svec calls (diagnostics only; no state block here)
         self.w = [0.0] * (self.NIN + 1)
         self.wg = [0.0] * (self.NIN + 1)
         self.tab = [dict() for _ in ORDERS]
@@ -225,7 +348,11 @@ class Model:
                            for i in range(SD)]
                 self.bq = [0.0] * SD
                 self.beta = [0.0] * S
-            self.vtab = array("H", [0]) * (2 << VBITS)   # flat (n0, n1) vote counts
+            if arm in MOE_ARMS:
+                self.mvtab = array("d", [0.0]) * (2 << VBITS)   # §79: flat (n0, n1) FLOAT expert counts
+                self.mo_w = []; self.mo_p1 = []; self.mo_rlast = None   # §79: running posterior, per-bit p_k(1), last r
+            else:
+                self.vtab = array("H", [0]) * (2 << VBITS)   # flat (n0, n1) vote counts
             self.at_n = 0                          # non-empty slots served (0 = features/vote off)
             self.at_ks = []; self.at_E = []; self.at_a = []; self.at_T = []; self.at_wT = []
             self.at_AT = 1.0; self.at_c = None; self.at_q = None
@@ -234,6 +361,10 @@ class Model:
             self.aGr = [0.0] * SD                  # per-byte dL/dr
             self.aGa = []                          # per-byte dL/da_k (vote path), aligned with at_T
             self.vt_idx = []; self.vt_s = []; self.vt_v = 0.0   # per-bit vote cache (predict time)
+            if arm in ORACLE_ARMS:
+                self.oracle_wid = 0                # §78B: set by the probe (0 = no oracle)
+                self.orc_served = 0                # attention-served bytes (slots non-empty)
+                self.orc_absent = 0                # ... of which oracle_wid was 0 or not in the slots
         self.htail = 0; self.cur = 0; self.phase = 0
         self.sbase = self.NM
         self.wh = FNV0                 # rolling FNV-1a over lowercased word bytes
@@ -355,6 +486,23 @@ class Model:
             if self.arm == "attnscr":
                 for j in range(SD + 1):
                     sts[i] = self._sr.uniform(-1, 1); i += 1
+            elif self.at_n and self.arm in MOE_ARMS:
+                # §79: pooled r (a = g), then ONE feature stretch(p_moe), p_moe = sum_k w_k p_k(1) over ALL candidates
+                r = self.at_r
+                for j in range(SD):
+                    sts[i] = r[j]; i += 1
+                key2 = (self.phase << 8) | self.cur
+                vt = self.mvtab; vmask = (1 << VBITS) - 1; wpost = self.mo_w
+                idxs = []; p1s = []; pm = 0.0
+                for t, hb in enumerate(self.at_hb):
+                    hx = ((hb ^ key2) * 0x94D049BB133111EB) & M64
+                    ix = (hx ^ (hx >> 29)) & vmask
+                    n0 = vt[2 * ix]; n1 = vt[2 * ix + 1]
+                    p1 = (n1 + 0.2) / (n0 + n1 + 0.4)
+                    idxs.append(ix); p1s.append(p1)
+                    pm += wpost[t] * p1
+                self.vt_idx = idxs; self.mo_p1 = p1s
+                sts[i] = stretch(pm); i += 1
             elif self.at_n:
                 r = self.at_r
                 for j in range(SD):
@@ -380,6 +528,17 @@ class Model:
         if self.arm == "semsim":
             for j in range(S):
                 sts[i] = self.curdots[j]; i += 1
+        if self.arm in W78_ARMS:
+            if self.arm in PVEC_ARMS:
+                v = self.pv
+                if v is not None:                  # empty slot -> zero features
+                    pb = self.pbase
+                    for k in range(SD):
+                        sts[pb + k] = v[k]
+            if self.arm in CNT_ARMS:
+                c = self.wctab.get((self.slots[0], self.phase, self.cur))
+                n0, n1 = (c[0], c[1]) if c else (0, 0)
+                sts[self.cbase] = stretch((n1 + 0.2) / (n0 + n1 + 0.4))
         if self.use_match:
             st = 0.0
             if self.mlen >= self.GATE and 0 <= self.mptr < len(self.hist):
@@ -416,7 +575,18 @@ class Model:
             base = self.NM + M + 1; w = self.w; Gr = self.aGr
             for j in range(SD):
                 Gr[j] += g * w[base + j]
-            if self.arm != "attnrec":
+            if self.arm in MOE_ARMS:
+                # §79: within-byte posterior w_k <- w_k p_k(y) / sum_i w_i p_i(y)  (runs whether or not learn)
+                wpost = self.mo_w; p1s = self.mo_p1
+                if y:
+                    num = [wpost[t] * p1s[t] for t in range(len(p1s))]
+                else:
+                    num = [wpost[t] * (1.0 - p1s[t]) for t in range(len(p1s))]
+                zs = 0.0
+                for x in num:
+                    zs += x
+                self.mo_w = [x / zs for x in num]
+            elif self.arm != "attnrec":
                 gv = g * w[base + SD] / self.at_AT
                 v = self.vt_v; ss = self.vt_s; Ga = self.aGa
                 for t in range(len(ss)):
@@ -435,6 +605,18 @@ class Model:
                     bi = base + si * SD
                     for k in range(SD):
                         gr[k] += g * w[bi + k]
+        if self.arm in PVEC_LEARN_ARMS:
+            # §78A: the legacy slots credit for slots[0] only, at this arm's explicit base
+            w_id = self.slots[0]
+            if w_id:
+                g = p - y
+                w = self.w; pb = self.pbase
+                gr = self.sgrad.get(w_id)
+                if gr is None:
+                    gr = [0.0] * SD
+                    self.sgrad[w_id] = gr
+                for k in range(SD):
+                    gr[k] += g * w[pb + k]
         if learn:
             err = y - p
             for j in range(self.NIN + 1):
@@ -457,7 +639,40 @@ class Model:
                 if c is None:
                     c = [0, 0]; self.xtab[key] = c
                 c[y] += 1
-            if self.arm in ATTN_READ_ARMS and self.at_n:
+            if self.arm in CNT_ARMS:
+                key = (self.slots[0], self.phase, self.cur)
+                c = self.wctab.get(key)
+                if c is None:
+                    c = [0, 0]; self.wctab[key] = c
+                c[y] += 1
+            if self.arm in MOE_FC_ARMS and self.at_n:
+                # §79b: FULL-WEIGHT gate-independent counts n_{k,y} += 1.0 for every candidate, float halving at 255
+                vt = self.mvtab
+                for ix in self.vt_idx:
+                    j0 = 2 * ix; jy = j0 + y
+                    cy = vt[jy] + 1.0
+                    if cy >= 255.0:
+                        vt[jy] = cy * 0.5
+                        jo = j0 + 1 - y
+                        vt[jo] = vt[jo] * 0.5
+                    else:
+                        vt[jy] = cy
+            elif self.arm in MOE_ARMS and self.at_n:
+                # §79: soft counts n_{k,y} += rho_k (running posterior incl. this bit), float halving at 255
+                vt = self.mvtab; rho = self.mo_w
+                for t, ix in enumerate(self.vt_idx):
+                    rt = rho[t]
+                    if rt == 0.0:
+                        continue
+                    j0 = 2 * ix; jy = j0 + y
+                    cy = vt[jy] + rt
+                    if cy >= 255.0:
+                        vt[jy] = cy * 0.5
+                        jo = j0 + 1 - y
+                        vt[jo] = vt[jo] * 0.5
+                    else:
+                        vt[jy] = cy
+            elif self.arm in ATTN_READ_ARMS and self.at_n:
                 vt = self.vtab
                 for ix in self.vt_idx:
                     j0 = 2 * ix; jy = j0 + y
@@ -505,12 +720,14 @@ class Model:
             self.hgrad = [0.0] * H
         if self.arm in ATTN_READ_ARMS:
             # SS77: apply the attention credit for the byte just SERVED (slots still pre-LRU)
+            if self.arm in MOE_ARMS:
+                self.mo_rlast = self.mo_w if self.at_n else None     # §79: served byte's responsibilities r
             if learn and self.at_n:
                 self._attn_apply(self._attn_grads())
             self.aGr = [0.0] * SD
             self.aGa = [0.0] * len(self.at_T)
         swid = wid if SLOTMODE == "prefix" else self.done
-        if self.arm in SLOT_ARMS and swid:
+        if (self.arm in SLOT_ARMS or self.arm in W78_ARMS) and swid:
             sl = self.slots
             if swid in sl:
                 sl.remove(swid)
@@ -569,6 +786,20 @@ class Model:
                                 e = gv[k] - sc * gr[k]
                                 gv[k] = 1.0 if e > 1.0 else (-1.0 if e < -1.0 else e)
             self.sgrad.clear()
+        if self.arm in W78_ARMS:
+            # §78A: apply the credit for the byte just served (only when learn), then refresh slots[0]'s vector
+            if self.sgrad:
+                if learn:
+                    lr = self.lr_s
+                    for w_id, gr in self.sgrad.items():
+                        v = self.semb[w_id]
+                        for k in range(SD):
+                            e = v[k] - lr * gr[k]
+                            v[k] = 1.0 if e > 1.0 else (-1.0 if e < -1.0 else e)
+                self.sgrad.clear()
+            if self.arm in PVEC_ARMS:
+                s0 = self.slots[0]
+                self.pv = self._svec(s0) if s0 else None
         if self.use_state and self.arm != "scrambled" and learn:
             # 1) per-word eligibility traces (v2 long-range credit): decay every recent word's
             #    trace; the word that shaped the state serving THIS byte collects its G fresh
@@ -684,6 +915,18 @@ class Model:
                 den += GP[k]
             a = [GP[k] / den for k in ks]
             c = None; q = None
+        elif self.arm in MOE_FIXED_GATE:
+            # §79: frozen gate. uni: 1/n; orc: one-hot on oracle_wid's slot (1/n if 0 or absent)
+            c = None; q = None
+            a = [1.0 / n] * n
+            if self.arm == "attnmoe_orc":
+                self.orc_served += 1
+                ow = self.oracle_wid
+                if ow and ow in sl:
+                    a = [0.0] * n
+                    a[ks.index(sl.index(ow))] = 1.0
+                else:
+                    self.orc_absent += 1
         else:
             c = list(E[0])
             q = [0.0] * SD
@@ -725,10 +968,17 @@ class Model:
             at = a[t]; Et = E[t]
             for j in range(SD):
                 r[j] += at * Et[j]
-        T = sorted(range(n), key=lambda t: -a[t])[:TOPM]      # stable: ties -> more recent slot
+        if self.arm in MOE_ARMS:
+            T = list(range(n))                          # §79: every non-empty slot is a candidate expert
+        elif self.arm in ORACLE_ARMS:
+            T = self._oracle_T(sl, ks, a, n)
+        else:
+            T = sorted(range(n), key=lambda t: -a[t])[:TOPM]      # stable: ties -> more recent slot
         AT = 0.0
         for t in T:
             AT += a[t]
+        if not T:
+            AT = 1.0                                   # §78B attnorc1, oracle absent: no vote (feature 0)
         ctx = self.htail & ((1 << (8 * VORD)) - 1)
         hb = []
         for t in T:
@@ -739,12 +989,29 @@ class Model:
         self.at_AT = AT; self.at_wT = [a[t] / AT for t in T]; self.at_c = c; self.at_q = q
         self.at_r = r; self.at_hb = hb
         self.aGr = [0.0] * SD; self.aGa = [0.0] * len(T)
+        if self.arm in MOE_ARMS:
+            self.mo_w = list(a)                         # §79: posterior at the byte's first bit = gate prior g
+
+    def _oracle_T(self, sl, ks, a, n):
+        """§78B forced vote set (positions into ks). attnorc1: {oracle slot} or empty when absent;
+        attnorc4: {oracle slot} + top-(TOPM-1) others by a, or attn's top-TOPM when absent."""
+        self.orc_served += 1
+        ow = self.oracle_wid
+        to = ks.index(sl.index(ow)) if (ow and ow in sl) else -1
+        if to < 0:
+            self.orc_absent += 1
+            if self.arm == "attnorc1":
+                return []
+            return sorted(range(n), key=lambda t: -a[t])[:TOPM]
+        if self.arm == "attnorc1":
+            return [to]
+        return [to] + [t for t in sorted(range(n), key=lambda t: -a[t]) if t != to][:TOPM - 1]
 
     def _attn_grads(self):
         """exact gradients of the byte's summed nat loss (params frozen within the byte).
         returns (dE per served slot position, dWq, dbq, dbeta{k: g}); query parts None for attnrec."""
         n = self.at_n; E = self.at_E; a = self.at_a; Gr = self.aGr
-        if self.arm == "attnrec":
+        if self.arm == "attnrec" or self.arm in MOE_FIXED_GATE:
             dE = [[a[t] * Gr[j] for j in range(SD)] for t in range(n)]
             return dE, None, None, None
         dA = [0.0] * n
@@ -753,12 +1020,17 @@ class Model:
             for j in range(SD):
                 d += Gr[j] * Et[j]
             dA[t] = d
-        for u, t in enumerate(self.at_T):
-            dA[t] += self.aGa[u]
+        if self.arm not in MOE_ARMS:
+            for u, t in enumerate(self.at_T):
+                dA[t] += self.aGa[u]
         sbar = 0.0
         for t in range(n):
             sbar += a[t] * dA[t]
         de = [a[t] * (dA[t] - sbar) for t in range(n)]
+        if self.arm in MOE_RESP_ARMS:
+            rr = self.mo_w                              # §79: after bit 8 the posterior IS r_k = g_k P_k / sum g P
+            for t in range(n):
+                de[t] += a[t] - rr[t]                   # d(-ln sum_k g_k P_k)/de_k
         q = self.at_q; c = self.at_c
         dq = [0.0] * SD
         if self.arm == "attncos":
@@ -784,7 +1056,7 @@ class Model:
                     dq[j] += dt * Et[j]
         dbeta = {self.at_ks[t]: de[t] for t in range(n)}
         dWq = [[dq[i2] * c[j] for j in range(SD)] for i2 in range(SD)]
-        dbq = list(dq)
+        dbq = None if self.arm in MOE_NOBQ_ARMS else list(dq)     # §79b attnmoe_fcnb: bq fixed at 0
         if self.arm != "attncos":
             dE = [[a[t] * Gr[j] + de[t] * q[j] for j in range(SD)] for t in range(n)]
         Wq = self.Wq; d0 = dE[0]                     # slot 0 is also the query source
@@ -811,8 +1083,9 @@ class Model:
                 for j in range(SD):
                     e = Wi[j] - lr * gi[j]
                     Wi[j] = 8.0 if e > 8.0 else (-8.0 if e < -8.0 else e)
-                e = self.bq[i2] - lr * dbq[i2]
-                self.bq[i2] = 8.0 if e > 8.0 else (-8.0 if e < -8.0 else e)
+                if dbq is not None:
+                    e = self.bq[i2] - lr * dbq[i2]
+                    self.bq[i2] = 8.0 if e > 8.0 else (-8.0 if e < -8.0 else e)
             for k, g in dbeta.items():
                 e = self.beta[k] - lr * g
                 self.beta[k] = 8.0 if e > 8.0 else (-8.0 if e < -8.0 else e)
@@ -1015,6 +1288,28 @@ def report(results, sizes, secs):
         else:
             v_a += "; SELECTION untested (no attnrec arm)"
         print(f"  VERDICT (attn): {v_a}.")
+    if present & set(W78_ARMS):
+        # §78A: is the learned prefix vector more than a count word model? (values are bpb differences; > 0 means the subtracted arm compresses better)
+        def raw(f):
+            return [f(by, kb) for kb in sizes]
+        if {"wcnt", "baseline"} <= present:
+            print(f"wcnt   vs baseline (count word model)  : {series(lambda B, kb: B['baseline'][kb] - B['wcnt'][kb])}")
+        if {"pvec", "baseline"} <= present:
+            print(f"pvec   vs baseline (the §72 channel)   : {series(lambda B, kb: B['baseline'][kb] - B['pvec'][kb])}")
+        if {"pvecr", "baseline"} <= present:
+            print(f"pvecr  vs baseline (frozen vectors)    : {series(lambda B, kb: B['baseline'][kb] - B['pvecr'][kb])}")
+        if {"wcnt", "wcntpvec"} <= present:
+            a1 = raw(lambda B, kb: B["wcnt"][kb] - B["wcntpvec"][kb])
+            ok1 = all(x >= 0.002 for x in a1)
+            print(f"A1 wcnt - wcntpvec (vector beyond count): {[round(x, 4) for x in a1]}"
+                  f"  -> >=+0.002 at every size on THIS corpus: {'yes' if ok1 else 'NO'}")
+        if {"wcntpvecr", "wcntpvec"} <= present:
+            a2 = raw(lambda B, kb: B["wcntpvecr"][kb] - B["wcntpvec"][kb])
+            ok2 = all(x >= 0.002 for x in a2)
+            print(f"A2 wcntpvecr - wcntpvec (learning)      : {[round(x, 4) for x in a2]}"
+                  f"  -> >=+0.002 at every size on THIS corpus: {'yes' if ok2 else 'NO'}")
+        print("  (the pre-registered §78A verdict needs A1 and A2 at every size on BOTH code and wt103, then stdlib;"
+              " see the module docstring)")
     if "attncos" in present:
         if "baseline" in present:
             c_help = series(lambda B, kb: B["baseline"][kb] - B["attncos"][kb])  # >0 crosses
