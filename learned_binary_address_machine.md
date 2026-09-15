@@ -3802,6 +3802,43 @@ engine-bound learned-memory channel.
 
 ---
 
+## 82. The lean selector ported to the engine — it beats strong itself (`strong.rs` `BLSEL=1`)
+
+The §81 lean channel ported per the pre-named design: sentence-scoped LRU of completed words
+(depth `NSELSLOTS`, default 32), full-weight vote cells for ALL candidates (flat 2^22 table keyed
+(word, 3-byte ctx, phase, partial)), the query-free contextual-usefulness gate (2^22 table,
+same hyperparameters as §81), and the vote fed as **one input to ALL THREE mixers** — the §78.3
+placement; the engine's context-selected mixers are its analog of §81's own context-selected
+weight. Default OFF = bit-identical (0.231368 @300 KB re-verified after the port).
+
+**Port-rule A/B (whole-stream, obits 25; baselines = the §80 defaults `BLWNS=1 BLPVEC=2`):**
+
+| corpus | baseline | `BLSEL=1` | gain |
+|---|---|---|---|
+| corpus_big 11 MB | 0.215536 | **0.215499** | **+0.000037** |
+| corpus_big, `NSELSLOTS=16` | — | 0.215491 | +0.000045 |
+| stdlib.bin 10.6 MB | 0.125011 | 0.125021 | −0.000010 (tie) |
+| enwik8 first 30 MB | 0.202723 | **0.202645** | **+0.000078** |
+
+- **The port rule is met on 2 of 3 corpora** (both text; stdlib ties): the first learned
+  long-range memory channel in the project's history that adds net compression to the
+  production engine — every §72–§79 channel was inert or negative there. At 300 KB it already
+  gains +0.000076 on top of the §80 defaults.
+- Honest scope: the margins are ~5–10× smaller than `BLWNS`'s; single run per config; the
+  engine's whole-stream online setting differs from the instrument's copy-off decontaminated
+  gate (the per-corpus pattern inverts: stdlib was the instrument's best, ties here — the
+  engine's word models + match absorb part of the channel's instrument value online).
+  Default stays OFF pending the owner's adoption decision (the §80 precedent, in a separate
+  reviewed commit); the flag is validated, documented, and cheap (~5–15 % wall time).
+
+**The arc §77→§82 in one line:** audit found the §72 channel was a word model and the port
+trained uphill; §78 isolated what actually helps (forgetting, selection-not-storage); §79
+banked the forgetting as an engine default; §81 solved selection at the instrument (the first
+binding gate, and a lean form that beats a fair rail on real corpora); §82 ported it and it
+beats the engine itself. The strain's first learned-memory channel is now engine-bound.
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").

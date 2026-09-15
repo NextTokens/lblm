@@ -1,5 +1,11 @@
 # HANDOVER — the LBLM intelligence track, post-§81
 
+> **§82 update (2026-09-15):** the §81 lean selector is ported to the engine (`BLSEL=1`,
+> default OFF, bit-identical) and **beats strong itself** — the port rule met for the first
+> time by a learned-memory channel: corpus_big 0.215536 → 0.215499 (+0.000037), enwik8-30MB
+> 0.202723 → 0.202645 (+0.000078), stdlib ties (−0.00001). Owner adoption of the default is
+> the open decision (§80 precedent). Details: ledger §82.
+>
 > **§80–§81 update (2026-09-14):** the owner adopted the §79 engine flags as defaults
 > (`BLWNS=1`, `BLPVEC=2`; `BLWNS=0 BLPVEC=0` recovers the pre-§80 engine bit-identically;
 > commit cc0af5d). §81 then built the "simplest selector" and **learned long-range selection

@@ -97,6 +97,23 @@ const NIN: usize = NM + NH + NSP + 4 + NICM; // [orders][hi][sparse..][word][wor
 const NW: usize = NIN + 1; // mixer weights (inputs + bias)
 const PVD: usize = 8; // §79 per-prefix vector dims (BLPVEC)
 const NWMAX: usize = NIN + PVD + 1; // §79 storage width; ACTIVE width nw = NW, or NIN+PVD+1 under BLPVEC=2
+const SELW: usize = NWMAX + 1;      // §82 storage width with BLSEL (one more input: the selector vote)
+
+// ---- §82 the lean selector port (wstate.py v10 §81; env BLSEL, default OFF = bit-identical) ----
+const SELSMAX: usize = 64;   // max word-slot depth (active = NSELSLOTS, default 32)
+const SEL_TOPM: usize = 4;   // vote-set size
+const SEL_UGAIN: f64 = 4.0;  // gate gain on usefulness
+const SEL_PBD: f64 = 0.05;   // position (recency) bias per slot step
+const SEL_TSC: f64 = 2.0;    // softmax temperature
+const SEL_UDC: f64 = 0.995;  // usefulness EWMA decay
+const SEL_UCLIP: f64 = 4.0;  // usefulness clamp
+
+#[inline]
+fn sel_mix(mut h: u64) -> u64 {
+    h ^= h >> 33; h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 29; h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^ (h >> 32)
+}
 const NSEL: usize = 8 * 256;
 const HBITS: u32 = 22;
 const CLIMIT: u32 = 255;
@@ -291,6 +308,13 @@ fn main() {
     let simmin = envf("SIMMIN", 0.25);             // §74 cosine floor for a neighbour vote
     let nslots: usize = (envf("NSLOTS", 6.0) as usize).clamp(1, SLOTS);   // §75 active LRU depth
     let blpvec: u32 = envf("BLPVEC", 2.0) as u32;   // §79 per-prefix vector: 0 off, 1 global head, 2 all mixers.
+    // §82: the §81 lean selector, ported. Sentence-scoped word LRU + full-weight vote cells for
+    // ALL candidates + a query-free contextual-usefulness gate + the vote fed to ALL THREE mixers
+    // (the §78.3 placement). Default OFF = bit-identical; NSELSLOTS/SELVBITS/SELUBITS tune it.
+    let blsel = env::var("BLSEL").map(|s| s == "1").unwrap_or(false);
+    let nselslots: usize = (envf("NSELSLOTS", 32.0) as usize).clamp(1, SELSMAX);
+    let selvbits: u32 = envf("SELVBITS", 22.0) as u32;
+    let selubits: u32 = envf("SELUBITS", 22.0) as u32;
     // DEFAULT 2 since the §80 owner adoption of the §79 result (enwik8 0.199145 -> 0.196123,
     // decodability verified §79R); set BLPVEC=0 to recover the pre-§80 engine bit-identically.
     if blpvec > 2 {
@@ -302,8 +326,8 @@ fn main() {
     let blwns = env::var("BLWNS").map(|s| s != "0").unwrap_or(true);     // §79 NS rule on wdc/wdc2
     let ns_all = env::var("BLNSALL").map(|s| s == "1").unwrap_or(false); // §79 NS rule on every count table
     let ns_w = blwns || ns_all;
-    let nin = if blpvec == 2 { NIN + PVD } else { NIN };  // §79 active mixer inputs (= bias index)
-    let nw = if blpvec == 2 { NWMAX } else { NW };         // §79 active mixer width (= nin + 1)
+    let nin = if blsel { NWMAX } else if blpvec == 2 { NIN + PVD } else { NIN };  // §82: bias index
+    let nw = if blsel { SELW } else if blpvec == 2 { NWMAX } else { NW };         // §82: active mixer width
 
     let mut raw = fs::read(path).expect("read input");
     if cap > 0 && raw.len() > cap { raw.truncate(cap); }
@@ -327,14 +351,14 @@ fn main() {
     // high orders: merged hashed tables (no tags), exactly like the Python
     let mut htab: Vec<Vec<u32>> = (0..NH).map(|_| vec![0u32; 2 * (1usize << HBITS)]).collect();
 
-    let mut mixers = vec![[0.0f64; NWMAX]; NSEL];
-    let mut mixers_g = vec![[0.0f64; NWMAX]; NSEL];
+    let mut mixers = vec![[0.0f64; SELW]; NSEL];
+    let mut mixers_g = vec![[0.0f64; SELW]; NSEL];
     // a SECOND context-selected mixer, partitioned by order-2 (prev_byte,prev2) instead of order-1
     const NSEL2: usize = 8 * 2048;
-    let mut mixers2 = vec![[0.0f64; NWMAX]; NSEL2];
-    let mut mixers2_g = vec![[0.0f64; NWMAX]; NSEL2];
-    let mut gmix = [0.0f64; NWMAX];
-    let mut gmix_g = [0.0f64; NWMAX];
+    let mut mixers2 = vec![[0.0f64; SELW]; NSEL2];
+    let mut mixers2_g = vec![[0.0f64; SELW]; NSEL2];
+    let mut gmix = [0.0f64; SELW];
+    let mut gmix_g = [0.0f64; SELW];
     let mut final_w = [0.3f64, 0.3, 0.2, 0.0]; // [w_sel, w_global, w_sel2, bias]
     let mut final_g = [0.0f64; 4];
     let mut apm1 = Apm::new(256 * 8, 33, 0.007);
@@ -363,6 +387,26 @@ fn main() {
     let mut soft_w = 0.0f64;                           // the head weight into the global mixer
     let mut soft_wg = 0.0f64;                          // RMSProp state for the head
 
+    // §82 selector state (allocated only when BLSEL)
+    let selvsz = 2 * (1usize << selvbits);
+    let selusz = 1usize << selubits;
+    let selvmask = (1usize << selvbits) - 1;
+    let selumask = selusz - 1;
+    let mut sl2 = [0u64; SELSMAX];                     // sentence-scoped word LRU
+    let mut selvt: Vec<f64> = if blsel { vec![0.0f64; selvsz] } else { Vec::new() };  // vote (n0,n1)
+    let mut selut: Vec<f64> = if blsel { vec![0.0f64; selusz] } else { Vec::new() };  // usefulness u[(ctx3,word)]
+    let mut sel_nc = 0usize;                           // current candidates (packed in sl2[0..sel_nc])
+    let mut sel_gk: u64 = 0;                           // the gate ctx3 used for the byte being served
+    let mut sel_T = [0usize; SEL_TOPM];                // candidate indices of the vote set
+    let mut sel_nT = 0usize;                           // vote-set size
+    let mut sel_wT = [0.0f64; SELSMAX];                // renormalised mixture weight per T member
+    let mut sel_ix = [0usize; SELSMAX];                // per-bit vote-cell indices (all candidates)
+    let mut sel_p1 = [0.0f64; SELSMAX];                // per-bit p_k(1) (all candidates)
+    let mut sel_ll = [0.0f64; SELSMAX];                // per-byte log-likelihood accumulators
+    let mut sel_uw = 0.0f64;                           // per-byte sum |mixer weight on f|
+    let mut sel_f = 0.0f64;                            // per-bit vote feature stretch(pm)
+    let mut sel_active = false;                        // whether the per-bit caches are valid
+
     // §79 per-prefix vector state (tables allocated only when BLPVEC != 0)
     let pvsz = if blpvec != 0 { 1usize << sbits } else { 1 };
     let mut pv_tab: Vec<[f64; PVD]> = vec![[0.0f64; PVD]; pvsz];
@@ -383,7 +427,7 @@ fn main() {
     let mut byte_pos: usize = 0;
     let mut htail: u64 = 0;
 
-    let mut sts = [0.0f64; NWMAX];
+    let mut sts = [0.0f64; SELW];
     let mut oslot = [0usize; NM];
     let mut oreset = [false; NM];
     // indirect context models: per-context bit-history byte + an adaptive StateMap over the 256 histories
@@ -493,6 +537,30 @@ fn main() {
         sts[nin] = 1.0;
         // §79 BLPVEC=2: the current prefix's vector as 8 ordinary inputs (between the models and the bias)
         if blpvec == 2 { for k in 0..PVD { sts[NIN + k] = if pv_id != 0 { pv_feat[k] } else { 0.0 }; } }
+        // §82 BLSEL: the selector vote as ONE more input to ALL THREE mixers (§78.3 placement;
+        // the mixers are already context-selected, which is the engine's analog of §81's own
+        // context-selected weight). Reads EVERY candidate's cell (cells train for all, §81).
+        if blsel {
+            if sel_active && sel_nc > 0 {
+                let ctx3 = htail & 0xFF_FFFF;
+                for j in 0..sel_nc {
+                    let h = sl2[j].wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        ^ ctx3.wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+                        ^ (((phase << 7) | cur as usize) as u64).wrapping_mul(0x1656_67B1_9E37_79F9);
+                    let ix = ((sel_mix(h) >> (64 - selvbits)) as usize) & selvmask;
+                    sel_ix[j] = ix;
+                    let (n0, n1) = (selvt[2 * ix], selvt[2 * ix + 1]);
+                    sel_p1[j] = (n1 + 0.2) / (n0 + n1 + 0.4);
+                }
+                let mut pm = 0.0f64;
+                for t in 0..sel_nT { pm += sel_wT[t] * sel_p1[sel_T[t]]; }
+                sel_f = stretch(pm);
+                sel_uw += gmix[NWMAX].abs();
+                sts[NWMAX] = sel_f;
+            } else {
+                sts[NWMAX] = 0.0;
+            }
+        }
 
         let sel = ((phase << 8) | prev_byte as usize) & (NSEL - 1);
         let sel2 = ((phase << 11) | ((prev_byte.wrapping_mul(769) ^ prev2.wrapping_mul(2246822519)) as usize & 2047)) & (NSEL2 - 1);
@@ -617,6 +685,23 @@ fn main() {
                 w[k] += alr_lr * gk / (wg[k].sqrt() + RMS_EPS);
             }
         }
+        // §82 BLSEL: full-weight counts for ALL candidates (the §81 chicken-and-egg fix) +
+        // per-candidate log-likelihoods (the usefulness signal)
+        if blsel && sel_active && sel_nc > 0 {
+            let ysi = y as usize;
+            for j in 0..sel_nc {
+                let pr = if y == 1 { sel_p1[j] } else { 1.0 - sel_p1[j] };
+                sel_ll[j] += pr.max(1e-9).log2();
+                let j0 = 2 * sel_ix[j];
+                let cy = selvt[j0 + ysi] + 1.0;
+                if cy + selvt[j0 + 1 - ysi] >= 255.0 {
+                    selvt[j0 + ysi] = cy * 0.5;
+                    selvt[j0 + 1 - ysi] *= 0.5;
+                } else {
+                    selvt[j0 + ysi] = cy;
+                }
+            }
+        }
         // §79 BLPVEC=1: train the global-mixer prefix head; credit uses the PRE-update head weight
         if blpvec == 1 && pv_id != 0 {
             for k in 0..PVD {
@@ -730,11 +815,53 @@ fn main() {
             mm.update_after_byte(&hist, byte_pos);
             mm2.update_after_byte(&hist, byte_pos);
             htail = ((htail << 8) | (b as u64)) & maskb[MAXB];
+            // §82: usefulness update for the byte just SERVED (candidates still pre-LRU)
+            if blsel && sel_active && sel_nc > 0 {
+                let mut mu = 0.0f64;
+                for j in 0..sel_nc { mu += sel_ll[j]; }
+                mu /= sel_nc as f64;
+                let mut wu = sel_uw / 8.0;
+                if wu > 1.0 { wu = 1.0; }
+                if wu > 0.02 {
+                    for j in 0..sel_nc {
+                        let mut adv = sel_ll[j] - mu;
+                        if adv > 1.0 { adv = 1.0; } else if adv < -1.0 { adv = -1.0; }
+                        let h = sel_mix(sel_gk ^ sl2[j].wrapping_mul(0x9E37_79B9_7F4A_7C15));
+                        let ui = ((h >> (64 - selubits)) as usize) & selumask;
+                        let mut u = selut[ui] * SEL_UDC + (1.0 - SEL_UDC) * wu * adv;
+                        if u > SEL_UCLIP { u = SEL_UCLIP; } else if u < -SEL_UCLIP { u = -SEL_UCLIP; }
+                        selut[ui] = u;
+                    }
+                }
+            }
+            if blsel {
+                for j in 0..SELSMAX { sel_ll[j] = 0.0; }
+                sel_uw = 0.0;
+                if b == 46 {                     // sentence scoping (§81: cross-sentence pollution)
+                    for j in 0..SELSMAX { sl2[j] = 0; }
+                    sel_nc = 0;
+                }
+            }
             if (65..=90).contains(&b) || (97..=122).contains(&b) {
                 word_hash = (word_hash.wrapping_mul(131) + ((b | 0x20) as u64)) & 0xFFF_FFFF;
             } else {
                 if word_hash != 0 {
                     prev_word_hash = word_hash; // remember the word that just ended
+                    if blsel {
+                        // §82: sentence-scoped LRU of completed words (packed, depth nselslots)
+                        let wid = word_hash;
+                        let mut pos = sel_nc;
+                        for j in 0..sel_nc { if sl2[j] == wid { pos = j; break; } }
+                        if pos < sel_nc {
+                            sl2.copy_within(0..pos, 1);
+                        } else if sel_nc < nselslots {
+                            sl2.copy_within(0..sel_nc, 1);
+                            sel_nc += 1;
+                        } else {
+                            sl2.copy_within(0..nselslots - 1, 1);
+                        }
+                        sl2[0] = wid;
+                    }
                     if use_slots {
                         // LRU move-to-front / insert of the completed word
                         let wid = word_hash;
@@ -812,6 +939,44 @@ fn main() {
                     word_hash = 0;
                 } else {
                     word_hash = 0;
+                }
+            }
+            // §82: forward -- the query-free gate over the CURRENT (post-LRU) slots -> serves the next byte
+            if blsel {
+                let ctx3 = htail & 0xFF_FFFF;
+                sel_gk = ctx3;
+                if sel_nc > 0 {
+                    let mut e = [0.0f64; SELSMAX];
+                    let mut mx = -1e30f64;
+                    for j in 0..sel_nc {
+                        let h = sel_mix(ctx3 ^ sl2[j].wrapping_mul(0x9E37_79B9_7F4A_7C15));
+                        let ui = ((h >> (64 - selubits)) as usize) & selumask;
+                        let mut ev = SEL_UGAIN * selut[ui] - SEL_PBD * j as f64;
+                        if ev > 12.0 { ev = 12.0; } else if ev < -12.0 { ev = -12.0; }
+                        e[j] = ev;
+                        if ev > mx { mx = ev; }
+                    }
+                    let mut z = 0.0f64;
+                    let mut a = [0.0f64; SELSMAX];
+                    for j in 0..sel_nc { let ex = ((e[j] - mx) / SEL_TSC).exp(); a[j] = ex; z += ex; }
+                    for j in 0..sel_nc { a[j] /= z; }
+                    sel_nT = SEL_TOPM.min(sel_nc);
+                    let mut taken = [false; SELSMAX];
+                    let mut at = 0.0f64;
+                    for t in 0..sel_nT {
+                        let mut best = 0usize;
+                        let mut bv = -1.0f64;
+                        for j in 0..sel_nc { if !taken[j] && a[j] > bv { bv = a[j]; best = j; } }
+                        taken[best] = true;
+                        sel_T[t] = best;
+                        at += bv;
+                    }
+                    if at <= 0.0 { at = 1.0; }
+                    for t in 0..sel_nT { sel_wT[t] = a[sel_T[t]] / at; }
+                    sel_active = true;
+                } else {
+                    sel_nT = 0;
+                    sel_active = false;
                 }
             }
             // §79: a letter moves the prefix key to the new letters-only prefix; a non-letter KEEPS the
