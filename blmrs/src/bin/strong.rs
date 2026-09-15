@@ -290,12 +290,16 @@ fn main() {
     let soft_k = envf("SOFTK", 8.0) as usize;      // §74 retrieved neighbours per byte
     let simmin = envf("SIMMIN", 0.25);             // §74 cosine floor for a neighbour vote
     let nslots: usize = (envf("NSLOTS", 6.0) as usize).clamp(1, SLOTS);   // §75 active LRU depth
-    let blpvec: u32 = envf("BLPVEC", 0.0) as u32;   // §79 per-prefix vector: 0 off, 1 global head, 2 all mixers
+    let blpvec: u32 = envf("BLPVEC", 2.0) as u32;   // §79 per-prefix vector: 0 off, 1 global head, 2 all mixers.
+    // DEFAULT 2 since the §80 owner adoption of the §79 result (enwik8 0.199145 -> 0.196123,
+    // decodability verified §79R); set BLPVEC=0 to recover the pre-§80 engine bit-identically.
     if blpvec > 2 {
         eprintln!("error: BLPVEC must be 0, 1 or 2 (got {})", blpvec);
         std::process::exit(2);
     }
-    let blwns = env::var("BLWNS").map(|s| s == "1").unwrap_or(false);    // §79 NS rule on wdc/wdc2
+    // DEFAULT ON since the §80 owner adoption (BLWNS=1 was the larger, free share of the §79 gain);
+    // set BLWNS=0 to recover the pre-§80 engine bit-identically.
+    let blwns = env::var("BLWNS").map(|s| s != "0").unwrap_or(true);     // §79 NS rule on wdc/wdc2
     let ns_all = env::var("BLNSALL").map(|s| s == "1").unwrap_or(false); // §79 NS rule on every count table
     let ns_w = blwns || ns_all;
     let nin = if blpvec == 2 { NIN + PVD } else { NIN };  // §79 active mixer inputs (= bias index)
