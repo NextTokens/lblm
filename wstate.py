@@ -250,22 +250,22 @@ MOE_NOBQ_ARMS = ("attnmoe_fcnb",)                      # §79b: bq fixed at 0, n
 #       bias, softmaxed at a scale that stays neither uniform nor saturated. Vote = probability-space
 #       mixture over the top-SEL_TOPM candidates; vote counts are FULL-WEIGHT per candidate
 #       (the §79b lesson: responsibility-weighted counts starve cells). Word mode, WSLOTS=32.
-§81 CORPUS PHASE PRE-REGISTERED (written 2026-09-14 before any §81 corpus run; the probe grid above
-  had already been run and committed at 30ca0d8):
-  Protocol: the standard gate (copy/match OFF, 13-byte decontamination, deterministic mask), seed 0,
-  WNS=1 everywhere (PAQ nonstationary rule on the order tables -- the §78.2 mandate), WSLOTMODE=word.
-  Corpora/sizes: code 100/200/400/585 KB; wt103 150/450/1200/2700 KB; stdlib 400/1200/2400 KB.
-  Arms: baseline (orders-NS); sel (WSLOTS=32, full selector); selpos (WSLOTS=32, position gate);
-  sel@1 (WSLOTS=1: the SAME machinery -- flat vote cells, contextual usefulness, context-selected
-  readout -- with candidates = the last completed word only: the no-binding control).
-  B1 (binding, load-bearing): sel beats sel@1 by >= 0.001 bpb at >= half the sizes of a corpus.
-  B2 (rail): sel beats baseline-NS by >= 0.001 bpb at >= half the sizes of a corpus.
-  B3 (gate): sel beats selpos at every size where sel beats sel@1.
-  Reading (pre-committed): B1+B2 on any corpus -> the selector carries real-data binding value beyond
-  near-word memory and beyond the orders rail; port to strong.rs under the beats-strong rule. B2 without
-  B1 -> word-model-like value only (the §78 lesson repeats; no port). Neither -> the probe binding does
-  not transfer to real corpora at this scale; honest negative, no port, re-assess.
-
+# §81 CORPUS PHASE PRE-REGISTERED (written 2026-09-14 before any §81 corpus run; the probe grid above
+# had already been run and committed at 30ca0d8):
+# Protocol: the standard gate (copy/match OFF, 13-byte decontamination, deterministic mask), seed 0,
+# WNS=1 everywhere (PAQ nonstationary rule on the order tables -- the §78.2 mandate), WSLOTMODE=word.
+# Corpora/sizes: code 100/200/400/585 KB; wt103 150/450/1200/2700 KB; stdlib 400/1200/2400 KB.
+# Arms: baseline (orders-NS); sel (WSLOTS=32, full selector); selpos (WSLOTS=32, position gate);
+# sel@1 (WSLOTS=1: the SAME machinery -- flat vote cells, contextual usefulness, context-selected
+# readout -- with candidates = the last completed word only: the no-binding control).
+# B1 (binding, load-bearing): sel beats sel@1 by >= 0.001 bpb at >= half the sizes of a corpus.
+# B2 (rail): sel beats baseline-NS by >= 0.001 bpb at >= half the sizes of a corpus.
+# B3 (gate): sel beats selpos at every size where sel beats sel@1.
+# Reading (pre-committed): B1+B2 on any corpus -> the selector carries real-data binding value beyond
+# near-word memory and beyond the orders rail; port to strong.rs under the beats-strong rule. B2 without
+# B1 -> word-model-like value only (the §78 lesson repeats; no port). Neither -> the probe binding does
+# not transfer to real corpora at this scale; honest negative, no port, re-assess.
+#
 SEL_ARMS = ("sel", "selpos", "selorc4")
 #   sel     : usefulness + position bias + context-selected readout   (THE HEADLINE)
 #   selpos  : position bias only, same readout                        -> isolates the readout fix
