@@ -250,6 +250,22 @@ MOE_NOBQ_ARMS = ("attnmoe_fcnb",)                      # §79b: bq fixed at 0, n
 #       bias, softmaxed at a scale that stays neither uniform nor saturated. Vote = probability-space
 #       mixture over the top-SEL_TOPM candidates; vote counts are FULL-WEIGHT per candidate
 #       (the §79b lesson: responsibility-weighted counts starve cells). Word mode, WSLOTS=32.
+§81 CORPUS PHASE PRE-REGISTERED (written 2026-09-14 before any §81 corpus run; the probe grid above
+  had already been run and committed at 30ca0d8):
+  Protocol: the standard gate (copy/match OFF, 13-byte decontamination, deterministic mask), seed 0,
+  WNS=1 everywhere (PAQ nonstationary rule on the order tables -- the §78.2 mandate), WSLOTMODE=word.
+  Corpora/sizes: code 100/200/400/585 KB; wt103 150/450/1200/2700 KB; stdlib 400/1200/2400 KB.
+  Arms: baseline (orders-NS); sel (WSLOTS=32, full selector); selpos (WSLOTS=32, position gate);
+  sel@1 (WSLOTS=1: the SAME machinery -- flat vote cells, contextual usefulness, context-selected
+  readout -- with candidates = the last completed word only: the no-binding control).
+  B1 (binding, load-bearing): sel beats sel@1 by >= 0.001 bpb at >= half the sizes of a corpus.
+  B2 (rail): sel beats baseline-NS by >= 0.001 bpb at >= half the sizes of a corpus.
+  B3 (gate): sel beats selpos at every size where sel beats sel@1.
+  Reading (pre-committed): B1+B2 on any corpus -> the selector carries real-data binding value beyond
+  near-word memory and beyond the orders rail; port to strong.rs under the beats-strong rule. B2 without
+  B1 -> word-model-like value only (the §78 lesson repeats; no port). Neither -> the probe binding does
+  not transfer to real corpora at this scale; honest negative, no port, re-assess.
+
 SEL_ARMS = ("sel", "selpos", "selorc4")
 #   sel     : usefulness + position bias + context-selected readout   (THE HEADLINE)
 #   selpos  : position bias only, same readout                        -> isolates the readout fix
@@ -259,6 +275,9 @@ SEL_TSC = 2.0       # softmax temperature (properly scaled scores; e is O(4) so 
 SEL_UDC = 0.995     # usefulness EWMA decay (timescale ~200 bytes)
 SEL_UCLIP = 4.0     # usefulness clamp
 SEL_TOPM = 4        # vote-set size (matches WTOPM=4 of the §77 arms)
+SVBITS = int(os.environ.get("WVBITS2", "22"))      # §81 vote-table bits (flat, bounded; real corpora)
+WNS = os.environ.get("WNS", "0") == "1"            # §81 corpus phase: PAQ nonstationary rule on the
+                                                   # order tables (§78.2: cumulative counters are a weak rail)
 SEL_UGAIN = 4.0     # gate gain on u (u is an EWMA of clipped log-advantage, |u| ~ 0.1 at
                     # probe scale; the gain puts a separated cue above ~12 slots of PBD)
 # §78A: the slots[0] channel in isolation (use_state=False; orders 0..6 + these inputs only)
@@ -390,7 +409,8 @@ class Model:
                 self.orc_served = 0                # attention-served bytes (slots non-empty)
                 self.orc_absent = 0                # ... of which oracle_wid was 0 or not in the slots
         if arm in SEL_ARMS:                        # §81 the simplest selector
-            self.svt = {}                          # vote store: (wid, vord_ctx, phase, cur) -> [n0, n1] floats
+            self.svt = array("d", [0.0]) * (2 << SVBITS)   # flat (n0, n1) vote counts, bounded
+            self.svmask = (1 << SVBITS) - 1
             self.suw = {}                          # per-word usefulness score (arm sel; EWMA of own-vote agreement)
             self.vsw = {}                          # CONTEXT-SELECTED vote weights: cx -> scalar
             self.vswg = {}                         # RMSProp state per cx
@@ -611,13 +631,15 @@ class Model:
             nall = len(self.sel_cand)
             p1all = [0.0] * nall
             keysall = [None] * nall
+            vt = self.svt
             for t in range(nall):
                 wid, vctx = self.sel_cand[t][0], self.sel_cand[t][1]
-                kk = (wid, vctx, self.phase, self.cur)
-                c = self.svt.get(kk)
-                n0, n1 = (c[0], c[1]) if c else (0.0, 0.0)
-                p1all[t] = (n1 + 0.2) / (n0 + n1 + 0.4)
-                keysall[t] = kk
+                h = (wid * 0x9E3779B97F4A7C15 ^ vctx * 0xC2B2AE3D27D4EB4F
+                     ^ ((self.phase << 7 | self.cur) * 0x165667B19E3779F9)) & 0xFFFFFFFFFFFFFFFF
+                ix = ((h ^ (h >> 31)) * 0xBF58476D1CE4E5B9 >> 42) & self.svmask
+                j0 = 2 * ix
+                p1all[t] = (vt[j0 + 1] + 0.2) / (vt[j0] + vt[j0 + 1] + 0.4)
+                keysall[t] = ix
             self.sel_p1all = p1all; self.sel_keysall = keysall
             pm = 0.0
             p1s = []
@@ -729,6 +751,8 @@ class Model:
                 if c is None:
                     c = [0, 0]; self.tab[k][key] = c
                 c[y] += 1
+                if WNS and c[1 - y] > 2:
+                    c[1 - y] = c[1 - y] // 2 + 1
             if self.use_state:
                 key = self._bkey(); c = self.btab.get(key)
                 if c is None:
@@ -793,13 +817,15 @@ class Model:
             gg = 0.999 * gg + 0.001 * g2 * g2
             self.vswg[cx] = gg
             self.vsw[cx] = self.vsw.get(cx, 0.0) + self.lr_vsw * g2 / (math.sqrt(gg) + 1e-4)
-            for kk in self.sel_keysall:
-                c = self.svt.get(kk)
-                if c is None:
-                    c = [0.0, 0.0]; self.svt[kk] = c
-                c[y] += 1.0
-                if c[0] + c[1] >= 255.0:
-                    c[0] *= 0.5; c[1] *= 0.5
+            vt = self.svt
+            for ix in self.sel_keysall:
+                j0 = 2 * ix; jy = j0 + y
+                cy = vt[jy] + 1.0
+                if cy + vt[j0 + 1 - y] >= 255.0:
+                    vt[jy] = cy * 0.5
+                    vt[j0 + 1 - y] = vt[j0 + 1 - y] * 0.5
+                else:
+                    vt[jy] = cy
         self.cur = (self.cur << 1) | y; self.phase += 1
         if self.phase == 8:
             self._byte_end(learn)
