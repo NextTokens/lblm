@@ -239,6 +239,28 @@ MOE_FIXED_GATE = ("attnmoe_uni", "attnmoe_orc",        # §79: gate not a functi
 MOE_RESP_ARMS = ("attnmoe", "attnmoe_fc", "attnmoe_fcnb")   # §79/§79b: learned gate trained by g_k - r_k
 MOE_FC_ARMS = ("attnmoe_fc", "attnmoe_fcnb", "attnmoe_uni_fc")   # §79b: full-weight, gate-independent expert counts
 MOE_NOBQ_ARMS = ("attnmoe_fcnb",)                      # §79b: bq fixed at 0, never learned
+# §81 (v10) THE SIMPLEST SELECTOR -- the two §77.4/§78B/§79B diagnosed causes fixed directly:
+#   (a) the vote's readout was ONE scalar mixer weight shared by ~99% of irrelevant bits (dilution/reversal):
+#       here the vote stretch(p_sel) is read through a CONTEXT-SELECTED weight of its own
+#       (per (prev_byte, phase, partial) cell, RMSProp) added to the mixer dot, so the deciding
+#       context can adopt the vote without being pinned by the rest of the stream;
+#   (b) every learned gate queried from slot 0, which at the deciding byte always holds the same
+#       word -- here the gate is QUERY-FREE: e_k = u[w_k] - SEL_PBD*k, a directly trained per-word
+#       usefulness score (EWMA of the word's own vote agreement, clamped) plus a recency position
+#       bias, softmaxed at a scale that stays neither uniform nor saturated. Vote = probability-space
+#       mixture over the top-SEL_TOPM candidates; vote counts are FULL-WEIGHT per candidate
+#       (the §79b lesson: responsibility-weighted counts starve cells). Word mode, WSLOTS=32.
+SEL_ARMS = ("sel", "selpos", "selorc4")
+#   sel     : usefulness + position bias + context-selected readout   (THE HEADLINE)
+#   selpos  : position bias only, same readout                        -> isolates the readout fix
+#   selorc4 : vote set forced to {cue} + top-3 by gate (oracle_wid, probe-only diagnostic)
+SEL_PBD = 0.05      # position bias per slot step (recency prior; small enough that learned usefulness outranks ~12 slots of recency)
+SEL_TSC = 2.0       # softmax temperature (properly scaled scores; e is O(4) so a stays graded)
+SEL_UDC = 0.995     # usefulness EWMA decay (timescale ~200 bytes)
+SEL_UCLIP = 4.0     # usefulness clamp
+SEL_TOPM = 4        # vote-set size (matches WTOPM=4 of the §77 arms)
+SEL_UGAIN = 4.0     # gate gain on u (u is an EWMA of clipped log-advantage, |u| ~ 0.1 at
+                    # probe scale; the gain puts a separated cue above ~12 slots of PBD)
 # §78A: the slots[0] channel in isolation (use_state=False; orders 0..6 + these inputs only)
 W78_ARMS = ("wcnt", "pvec", "pvecr", "wcntpvec", "wcntpvecr")
 CNT_ARMS = ("wcnt", "wcntpvec", "wcntpvecr")         # exact count expert keyed (slots[0], phase, partial)
@@ -250,7 +272,7 @@ VORD = int(os.environ.get("WVORD", "3"))                 # SS77: vote context or
 VBITS = int(os.environ.get("WVBITS", "22"))              # SS77: vote table = 2 * 2^VBITS counts
 M64 = (1 << 64) - 1
 SLOT_ARMS = ("slots", "slotsr", "slotsw", "semsim", "semfast", "matchslots",
-             "proj", "projr", "projscr", "scrambled") + ATTN_ARMS
+             "proj", "projr", "projscr", "scrambled") + ATTN_ARMS + SEL_ARMS
 LEARNED_SLOT_ARMS = ("slots", "slotsw", "semsim", "semfast", "matchslots")  # slot vectors trained by the loss
 SIM_ARMS = ("slotsw", "semsim")            # v5: +word expert (identity vs embedding bucket)
 XKEY_ARMS = ("slotsw", "semsim", "semfast")
@@ -292,12 +314,14 @@ class Model:
         self.NM = len(ORDERS)
         self.NIN = self.NM + ((M + 1) if self.use_state else 0)     # +1 = bucket expert
         self.NIN = self.NIN + (1 if self.use_match else 0)          # match/copy vote
-        if arm in SLOT_ARMS and arm not in PROJ_ARMS and arm not in ATTN_ARMS:
+        if arm in SLOT_ARMS and arm not in PROJ_ARMS and arm not in ATTN_ARMS and arm not in SEL_ARMS:
             self.NIN += S * SD                                     # word-slot features
         if arm in PROJ_ARMS:
             self.NIN += H                                          # SS76 projection-head features
         if arm in ATTN_ARMS:
             self.NIN += SD + 1                                     # SS77 pooled features + vote
+        if arm in SEL_ARMS:
+            self.NIN += SD                                         # §81 pooled features (the vote is read through its OWN context-selected weight, not a mixer input)
         if arm in XKEY_ARMS:
             self.NIN += 1                                          # word-expert feature
         if arm in ("semsim", "semfast"):
@@ -365,6 +389,28 @@ class Model:
                 self.oracle_wid = 0                # §78B: set by the probe (0 = no oracle)
                 self.orc_served = 0                # attention-served bytes (slots non-empty)
                 self.orc_absent = 0                # ... of which oracle_wid was 0 or not in the slots
+        if arm in SEL_ARMS:                        # §81 the simplest selector
+            self.svt = {}                          # vote store: (wid, vord_ctx, phase, cur) -> [n0, n1] floats
+            self.suw = {}                          # per-word usefulness score (arm sel; EWMA of own-vote agreement)
+            self.vsw = {}                          # CONTEXT-SELECTED vote weights: cx -> scalar
+            self.vswg = {}                         # RMSProp state per cx
+            self.lr_vsw = 0.02                     # the context-selected weight's learning rate
+            self.oracle_wid = 0                    # selorc4: set by the probe
+            self.orc_served = 0; self.orc_absent = 0
+            self.sel_pairs = []                    # [(wid, vord_ctx)] of the served vote set T
+            self.sel_wT = []                       # renormalised mixture weights over T
+            self.sel_cand = []                     # [(wid, a_k, vector)] over ALL candidates (vector credit)
+            self.sel_p1 = []                       # per-bit p_k(1) over T (predict-time cache)
+            self.sel_keys = []                     # per-bit vote-count keys over T
+            self.sel_p1all = []; self.sel_keysall = []   # per-bit over ALL candidates
+            self.sel_T = []                        # candidate indices of the served vote set
+            self.sel_f = 0.0; self.sel_cx = 0      # per-bit stretch(p_sel) and its context cell
+            self.sel_gk = None                       # the gate key (cx) used for the byte being served
+            self.sel_r = [0.0] * SD                # pooled features r = sum_k a_k E_k
+            self.sel_uwacc = 0.0                   # per-byte sum of |vsw| (usefulness weighting)
+            self.sel_Gr = [0.0] * SD               # per-byte dL/dr (mixer weights at predict time)
+            self.sel_acc = []                      # per-T vote agreement accumulator (usefulness)
+            self.at_n = 0; self.at_ks = []; self.at_a = []; self.at_T = []   # probe diagnostics
         self.htail = 0; self.cur = 0; self.phase = 0
         self.sbase = self.NM
         self.wh = FNV0                 # rolling FNV-1a over lowercased word bytes
@@ -463,7 +509,7 @@ class Model:
             n0, n1 = (c[0], c[1]) if c else (0, 0)
             sts[i] = stretch((n1 + 0.2) / (n0 + n1 + 0.4))
             i += 1
-        if self.arm in SLOT_ARMS and self.arm not in PROJ_ARMS and self.arm not in ATTN_ARMS:
+        if self.arm in SLOT_ARMS and self.arm not in PROJ_ARMS and self.arm not in ATTN_ARMS and self.arm not in SEL_ARMS:
             if self.arm == "scrambled":
                 for j in range(S * SD):
                     sts[i] = self._sr.uniform(-1, 1); i += 1
@@ -521,6 +567,13 @@ class Model:
                 sts[i] = v; i += 1
             else:
                 i += SD + 1
+        if self.arm in SEL_ARMS:
+            if self.sel_pairs:
+                r = self.sel_r
+                for j in range(SD):
+                    sts[i] = r[j]; i += 1
+            else:
+                i += SD
         if self.arm in XKEY_ARMS:
             c = self.xtab.get((self.xb << 10) | (self.phase << 7) | self.cur)
             n0, n1 = (c[0], c[1]) if c else (0, 0)
@@ -551,6 +604,32 @@ class Model:
         d = 0.0; w = self.w
         for j in range(self.NIN + 1):
             d += w[j] * sts[j]
+        if self.arm in SEL_ARMS and self.sel_pairs:
+            # §81: read EVERY candidate's vote cell (the chicken-and-egg fix: unselected
+            # words' cells must train so their usefulness can differentiate); the mixture
+            # pm uses only the served set T; read through a CONTEXT-SELECTED weight
+            nall = len(self.sel_cand)
+            p1all = [0.0] * nall
+            keysall = [None] * nall
+            for t in range(nall):
+                wid, vctx = self.sel_cand[t][0], self.sel_cand[t][1]
+                kk = (wid, vctx, self.phase, self.cur)
+                c = self.svt.get(kk)
+                n0, n1 = (c[0], c[1]) if c else (0.0, 0.0)
+                p1all[t] = (n1 + 0.2) / (n0 + n1 + 0.4)
+                keysall[t] = kk
+            self.sel_p1all = p1all; self.sel_keysall = keysall
+            pm = 0.0
+            p1s = []
+            keys = []
+            for t, ci in enumerate(self.sel_T):
+                p1s.append(p1all[ci]); keys.append(keysall[ci])
+                pm += self.sel_wT[t] * p1all[ci]
+            self.sel_p1 = p1s; self.sel_keys = keys
+            f = stretch(pm)
+            cx = ((self.htail & 0xFF) << 10) | (self.phase << 7) | self.cur
+            self.sel_f = f; self.sel_cx = cx
+            d += self.vsw.get(cx, 0.0) * f
         return squash(d), sts
 
     def _bkey(self):
@@ -591,6 +670,28 @@ class Model:
                 v = self.vt_v; ss = self.vt_s; Ga = self.aGa
                 for t in range(len(ss)):
                     Ga[t] += gv * (ss[t] - v)
+        if self.arm in SEL_ARMS and self.sel_pairs:
+            # §81: per-bit dL/dr at predict-time mixer weights (the vote needs no a-credit:
+            # the gate is not a function of the vectors)
+            g = p - y
+            base = self.NM + M + 1; w = self.w; Gr = self.sel_Gr
+            for j in range(SD):
+                Gr[j] += g * w[base + j]
+            # usefulness signal: EVERY candidate's own log-likelihood on this bit
+            # (agreement with the observed bit under its OWN vote cell)
+            p1a = self.sel_p1all; lll = self.sel_acc
+            if y:
+                for t in range(len(p1a)):
+                    q = p1a[t]
+                    lll[t] += math.log2(q if q > 1e-9 else 1e-9)
+            else:
+                for t in range(len(p1a)):
+                    q = p1a[t]
+                    lll[t] += math.log2((1.0 - q) if q < 1.0 - 1e-9 else 1e-9)
+            # §81: the readout itself identifies the bytes where the vote matters -- accumulate
+            # |vsw| to weight the usefulness update (dilutes the many bytes where the vote is
+            # irrelevant, which otherwise reward merely-predictable words)
+            self.sel_uwacc += abs(self.vsw.get(self.sel_cx, 0.0))
         if self.arm in LEARNED_SLOT_ARMS:
             # exact credit to slot-embedding dims: mixer weight at predict time, per bit
             g = p - y
@@ -683,6 +784,22 @@ class Model:
                         vt[jo] = (vt[jo] + 1) >> 1
                     else:
                         vt[jy] = cy
+        if self.arm in SEL_ARMS and self.sel_pairs and learn:
+            # §81: train the CONTEXT-SELECTED vote weight on the final error, then give every
+            # served candidate FULL-WEIGHT counts (the §79b lesson: shared responsibility starves cells)
+            g2 = (y - p) * self.sel_f
+            cx = self.sel_cx
+            gg = self.vswg.get(cx, 0.0)
+            gg = 0.999 * gg + 0.001 * g2 * g2
+            self.vswg[cx] = gg
+            self.vsw[cx] = self.vsw.get(cx, 0.0) + self.lr_vsw * g2 / (math.sqrt(gg) + 1e-4)
+            for kk in self.sel_keysall:
+                c = self.svt.get(kk)
+                if c is None:
+                    c = [0.0, 0.0]; self.svt[kk] = c
+                c[y] += 1.0
+                if c[0] + c[1] >= 255.0:
+                    c[0] *= 0.5; c[1] *= 0.5
         self.cur = (self.cur << 1) | y; self.phase += 1
         if self.phase == 8:
             self._byte_end(learn)
@@ -726,6 +843,14 @@ class Model:
                 self._attn_apply(self._attn_grads())
             self.aGr = [0.0] * SD
             self.aGa = [0.0] * len(self.at_T)
+        if self.arm in SEL_ARMS:
+            # §81: same timing contract (the byte just SERVED, slots still pre-LRU)
+            self._sel_apply(learn)
+            if b == 46:                      # '.' ends the sentence: candidates are scoped to
+                self.slots = [0] * S         # the CURRENT sentence (a 32-deep LRU otherwise lets
+                                             # the previous sentence's cue pollute its own vote
+                                             # cells with foreign outcomes -- measured 183 updates
+                                             # for 37 own sentences before this fix)
         swid = wid if SLOTMODE == "prefix" else self.done
         if (self.arm in SLOT_ARMS or self.arm in W78_ARMS) and swid:
             sl = self.slots
@@ -889,9 +1014,111 @@ class Model:
         self.htail = ((self.htail << 8) | b) & ((1 << 48) - 1); self.cur = 0; self.phase = 0
         if self.arm in ATTN_READ_ARMS:
             self._attn_forward()       # post-LRU slots, post-htail context -> serves the next byte
+        if self.arm in SEL_ARMS:
+            self._sel_forward()        # §81: same timing contract (post-LRU, post-htail)
         if self.use_match:
             self._match_after(b)
         return None
+
+    # ---- §81 the simplest selector ----
+    def _sel_forward(self):
+        """query-free gate (usefulness + position bias) over the current slots -> serves the next byte."""
+        sl = self.slots
+        if not sl[0]:
+            self.sel_pairs = []; self.sel_wT = []; self.sel_cand = []; self.sel_acc = []
+            self.sel_T = []; self.sel_p1all = []; self.sel_keysall = []
+            self.sel_r = [0.0] * SD; self.sel_Gr = [0.0] * SD
+            self.at_n = 0; self.at_ks = []; self.at_a = []; self.at_T = []
+            return
+        ks = [k for k in range(S) if sl[k]]
+        E = []
+        for k in ks:
+            v = self.semb.get(sl[k])
+            if v is None:
+                v = self._svec(sl[k])
+            E.append(v)
+        n = len(ks)
+        e = []
+        # §81: the usefulness key = the SAME 3-byte (VORD) context the vote cells key on --
+        # one byte of context mixes the outcome byte with every word-start byte and the
+        # separation dies (measured); three bytes isolate "after then " from "after golf "
+        gk = (self.htail & ((1 << (8 * VORD)) - 1)) if self.arm == "sel" else None
+        self.sel_gk = gk
+        for k in ks:
+            if self.arm == "sel":
+                ev = SEL_UGAIN * self.suw.get((gk, sl[k]), 0.0) - SEL_PBD * k
+                e.append(12.0 if ev > 12.0 else (-12.0 if ev < -12.0 else ev))
+            else:
+                e.append(-SEL_PBD * k)
+        mx = max(e)
+        ex = [math.exp((x - mx) / SEL_TSC) for x in e]
+        z = sum(ex)
+        a = [x / z for x in ex]
+        if self.arm == "selorc4":
+            self.orc_served += 1
+            ow = self.oracle_wid
+            if ow and ow in sl:
+                ci = ks.index(sl.index(ow))
+                by_a = [t for t in sorted(range(n), key=lambda t: -a[t]) if t != ci]
+                T = [ci] + by_a[:SEL_TOPM - 1]
+            else:
+                self.orc_absent += 1
+                T = sorted(range(n), key=lambda t: -a[t])[:SEL_TOPM]
+        else:
+            T = sorted(range(n), key=lambda t: -a[t])[:SEL_TOPM]   # stable: ties -> more recent slot
+        AT = 0.0
+        for t in T:
+            AT += a[t]
+        if AT <= 0.0:
+            AT = 1.0
+        r = [0.0] * SD
+        for t in range(n):
+            at_ = a[t]; Et = E[t]
+            for j in range(SD):
+                r[j] += at_ * Et[j]
+        vctx = self.htail & ((1 << (8 * VORD)) - 1)
+        self.sel_pairs = [(sl[ks[t]], vctx) for t in T]
+        self.sel_wT = [a[t] / AT for t in T]
+        self.sel_T = list(T)                        # candidate indices of the served vote set
+        self.sel_cand = [(sl[ks[t]], vctx, a[t], E[t]) for t in range(n)]
+        self.sel_acc = [0.0] * n                    # per-candidate per-byte log2-likelihood
+        self.sel_r = r
+        # probe diagnostics (attn-compatible names)
+        self.at_n = n; self.at_ks = ks; self.at_a = a; self.at_T = T; self.at_AT = AT
+
+    def _sel_apply(self, learn):
+        """§81: end-of-byte credit for the SERVED byte (call pre-LRU): per-word usefulness from
+        each candidate's OWN log-likelihood advantage over the candidate mean (so cells that
+        specialise rise, marginals sink); vectors through the pooled features r."""
+        if not self.sel_pairs:
+            self.sel_Gr = [0.0] * SD
+            self.sel_uwacc = 0.0
+            return
+        if learn:
+            if self.arm == "sel" and self.sel_acc and self.sel_gk is not None:
+                lll = self.sel_acc
+                mu = sum(lll) / len(lll)
+                wu = self.sel_uwacc / 8.0            # mean |vsw| over the byte's bits
+                if wu > 1.0:
+                    wu = 1.0
+                if wu > 0.02:                        # bytes where the vote is wanted at all
+                    for t in range(len(lll)):
+                        adv = lll[t] - mu
+                        if adv > 1.0: adv = 1.0
+                        elif adv < -1.0: adv = -1.0
+                        wid = self.sel_cand[t][0]
+                        uk = (self.sel_gk, wid)       # contextual: (byte's first-bit cx, word)
+                        u = self.suw.get(uk, 0.0)
+                        u = SEL_UDC * u + (1.0 - SEL_UDC) * wu * adv
+                        self.suw[uk] = max(-SEL_UCLIP, min(SEL_UCLIP, u))
+            Gr = self.sel_Gr
+            for wid, _vctx, at_, v in self.sel_cand:
+                for j in range(SD):
+                    e_ = v[j] - self.lr_s * at_ * Gr[j]
+                    v[j] = 1.0 if e_ > 1.0 else (-1.0 if e_ < -1.0 else e_)
+        self.sel_Gr = [0.0] * SD
+        self.sel_uwacc = 0.0
+        self.sel_acc = [0.0] * len(self.sel_cand)
 
     # ---- SS77 attentional read ----
     def _attn_forward(self):
