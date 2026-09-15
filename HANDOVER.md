@@ -1,4 +1,24 @@
-# HANDOVER — the LBLM intelligence track, post-§79
+# HANDOVER — the LBLM intelligence track, post-§81
+
+> **§80–§81 update (2026-09-14):** the owner adopted the §79 engine flags as defaults
+> (`BLWNS=1`, `BLPVEC=2`; `BLWNS=0 BLPVEC=0` recovers the pre-§80 engine bit-identically;
+> commit cc0af5d). §81 then built the "simplest selector" and **learned long-range selection
+> binds for the first time in the project's history** — +1.6…+2.3 bits/outcome at 2/12/24-word
+> gaps on the synthetic probe, and on real corpora a measured binding signal (+0.008…+0.027
+> beyond the same-machinery no-binding control, growing with data) that the LEAN form
+> (no EMA/bucket overhead; post-hoc, labelled) converts into net held-out wins against the
+> nonstationary rail: stdlib +0.0008/+0.0041 (1.2/2.4 MB), wt103 +0.0039 (2.7 MB) — exact
+> deterministic numbers. Mechanism: full-weight cells for ALL candidates (kills the §77.4
+> chicken-and-egg), a QUERY-FREE contextual usefulness gate keyed by the same 3-byte context
+> as the cells (a global per-word score measurably rewards merely-predictable words), a
+> CONTEXT-SELECTED vote readout (§78B's dilution fix, measured +2…+4 at deciding contexts),
+> and sentence-scoped candidates (cross-sentence cell pollution otherwise measured 183
+> updates for 37 own sentences). Next: port the lean channel to strong.rs per the §78.3
+> lesson (all three mixers) under the beats-strong rule. Details: ledger §81.
+
+---
+
+# Previous state (post-§79)
 
 **Scope of this document:** everything needed to continue after the 2026-09-14 session (ledger §77–§79),
 which audited the §72–§76 arc, settled its two loose ends, found a production improvement and closed

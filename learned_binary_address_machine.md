@@ -3728,6 +3728,80 @@ data scale, not learned selection in general.
 
 ---
 
+## 81. The simplest selector — learned selection binds, on the probe and (lean form) on real corpora (`wstate.py` v10 `sel` arms, `_bind_probe.py --grid81`)
+
+§79.6 left one untested lever (a query not taken from slot 0) and two loose ends. This section
+builds the selector the diagnoses pointed to, fixes all four §77.4/§78B/§79B causes **by
+construction**, and tests it at probe scale and on real corpora.
+
+**The mechanism** (word mode, S=32, sentence-scoped candidates — a 32-deep LRU otherwise lets
+the previous sentence's cue pollute its own vote cells with foreign outcomes; measured 183
+updates for 37 own sentences):
+1. **Vote store:** every word owns cells keyed (word, 3-byte context, phase, partial byte),
+   trained FULL-WEIGHT for ALL candidates every bit (the §79b `fc` lesson; the chicken-and-egg
+   of §77.4 dies because unselected words' cells train anyway). Flat bounded table (2^22×f64).
+2. **Query-free gate:** `e_k = 4·u[(3-byte ctx, w_k)] − 0.05·k`, softmax T=2, top-4. The
+   usefulness `u` is an EWMA of each candidate's own log-likelihood ADVANTAGE over the
+   candidate mean, keyed by the SAME 3-byte context the cells key on (a global per-word score
+   measurably rewards merely-predictable words; a 1-byte context key mixes every word-start
+   byte and the separation dies — both diagnosed on smoke runs).
+3. **Readout:** the vote `stretch(Σ w_t p_t)` is read through a **CONTEXT-SELECTED weight**
+   (per (prev_byte, phase, partial) cell, own RMSProp) added to the mixer dot — never one
+   global mixer weight shared with the ~99% of bits where the vote is irrelevant (§78B's
+   dilution/reversal). Measured +1.97…+4.1 at deciding contexts, never negative.
+4. **No responsibility loops:** direct per-candidate advantage updates only.
+
+**Probe (pre-registered; criteria in `_bind_probe.py` before any run; identical protocol to
+§77/§78B/§79):** `sel` gains **+2.336/+2.291 (G=2), +2.043/+2.014 (G=12), +1.677/+1.596
+(G=24)** vs the orders baseline — cue in the vote set **200/200** at every gap and seed.
+C1 PASS, C2a PASS, C2b PASS (`selpos`, same readout with a position-only gate: −0.04…+0.02 at
+G=12/24 — **the gate carries the binding**). C3 FAILed as designed and the verdict tree then
+printed "KILL (C2 first clause failed)" — a branch whose premise is false (C2 passed in every
+cell); the tree had no branch for headline-passes/oracle-control-fails. Post-hoc diagnosis,
+labelled: `selorc4`'s gate uses position-only logits, so its forced cue carries 0.045–0.076
+gate weight vs `sel`'s 0.17–0.28 — the control reproduces the §78B dilution **by
+construction** (it tested dilution, not the readout) and its failure *confirms* that weight
+concentration, not mere inclusion, is what pays. **First learned selector in the project's
+history that binds distant content** — after softmax attention (§77.4), cosine attention, and
+two responsibility gates (§79B) all failed.
+
+**Corpus (pre-registered B1–B3 in `wstate.py` before any corpus run; WNS=1 everywhere per the
+§78.2 mandate — the PAQ nonstationary rule on the order tables; the no-binding control is
+`sel@WSLOTS=1`: the SAME machinery with candidates = the last word only):**
+
+| corpus (sizes KB) | sel − sel@1 (B1, binding) | sel − baseline-NS (B2) | sellean − baseline-NS |
+|---|---|---|---|
+| code (100→585) | +0.0009…+0.0077 (2/4 sizes ≥ 0.001) | −0.008…−0.016 | −0.002…−0.009 |
+| wt103 (150→2700) | +0.008…+0.027, growing | −0.0003…−0.009 | −0.0001 / −0.0026 / **+0.0039** |
+| stdlib (400→2400) | +0.011…+0.022, growing | −0.012…**+0.0003** | −0.0057 / **+0.0008 / +0.0041** |
+
+- **B1 PASSES on all three corpora** — the binding signal is real on real data, and grows
+  with size (the `sel` arms carry the M=32 EMA + bucket expert inherited from §77-arm
+  comparability; `sel@1` carries it too, so B1 is unaffected).
+- **B2 as pre-registered FAILS** (the composite sits above the fair rail) — but the
+  decomposition is clean: the inherited state overhead costs ≈ what binding pays. A **lean**
+  selector (post-hoc, labelled: the same channel without the EMA/bucket block) **crosses
+  below the nonstationary rail on stdlib at 1.2/2.4 MB (+0.0008/+0.0041) and on wt103 at
+  2.7 MB (+0.0039)**, margins growing with data; code stays negative. `sel` beats `selpos`
+  everywhere (B3 holds).
+- **Seed replication of the lean crossings:** seeds 1 and 2 return numbers BIT-IDENTICAL to
+  seed 0 (stdlib 2.0822/2.1171; wt103 2.2822) — the lean arm contains no seeded randomness
+  (deterministic per-word vector init, zero-init weights, deterministic updates), so the
+  crossings are exact reproducible values, not seed averages; the `sel`/`sel@1`/`selpos`
+  comparisons that DO involve seeded state remain single-seed.
+
+**Where this leaves the strain.** Selection — the bottleneck every §77–§79 gate died on — is
+solved at probe scale by (cells-for-all, query-free contextual usefulness, context-selected
+readout, sentence scoping), and the same mechanism carries a measurable, growing binding
+signal on real corpora that a stripped form converts into a net held-out win against a fair,
+non-forgetting rail on 2 of 3 corpora. The port rule still gates the engine: the next step is
+a lean-channel port to `strong.rs` and the beats-strong test at 11 MB+, with the §78.3 lesson
+applied (all three mixers, not the global one). If the engine's word-model family absorbs it
+(§75's law), the corpus margins say where the ceiling is; if not, this is the strain's first
+engine-bound learned-memory channel.
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").

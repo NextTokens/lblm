@@ -266,7 +266,7 @@ MOE_NOBQ_ARMS = ("attnmoe_fcnb",)                      # §79b: bq fixed at 0, n
 # B1 -> word-model-like value only (the §78 lesson repeats; no port). Neither -> the probe binding does
 # not transfer to real corpora at this scale; honest negative, no port, re-assess.
 #
-SEL_ARMS = ("sel", "selpos", "selorc4")
+SEL_ARMS = ("sel", "selpos", "selorc4", "sellean")
 #   sel     : usefulness + position bias + context-selected readout   (THE HEADLINE)
 #   selpos  : position bias only, same readout                        -> isolates the readout fix
 #   selorc4 : vote set forced to {cue} + top-3 by gate (oracle_wid, probe-only diagnostic)
@@ -327,7 +327,7 @@ def clean_mask_det(train, test, K=13):
 class Model:
     def __init__(self, arm="baseline", lr=0.004, lr_rec=0.02, lr_emb=0.03, lr_s=0.02, lr_head=0.02, seed=0):
         self.arm = arm
-        self.use_state = arm not in ("baseline", "matchbase") and arm not in W78_ARMS
+        self.use_state = arm not in ("baseline", "matchbase", "sellean") and arm not in W78_ARMS
         self.use_match = arm in MATCH_ARMS     # §75 reconciliation arms: copy ON in the instrument
         self.lr, self.lr_rec, self.lr_emb, self.lr_s, self.lr_head = lr, lr_rec, lr_emb, lr_s, lr_head
         self.NM = len(ORDERS)
@@ -341,6 +341,7 @@ class Model:
             self.NIN += SD + 1                                     # SS77 pooled features + vote
         if arm in SEL_ARMS:
             self.NIN += SD                                         # §81 pooled features (the vote is read through its OWN context-selected weight, not a mixer input)
+            self.sel_rbase = self.NM + (M + 1 if self.use_state else 0)   # §81: r-feature base (no state block for sellean)
         if arm in XKEY_ARMS:
             self.NIN += 1                                          # word-expert feature
         if arm in ("semsim", "semfast"):
@@ -409,6 +410,7 @@ class Model:
                 self.orc_served = 0                # attention-served bytes (slots non-empty)
                 self.orc_absent = 0                # ... of which oracle_wid was 0 or not in the slots
         if arm in SEL_ARMS:                        # §81 the simplest selector
+            self.wcount = {}                       # (also for lean arms: no state block initializes it)
             self.svt = array("d", [0.0]) * (2 << SVBITS)   # flat (n0, n1) vote counts, bounded
             self.svmask = (1 << SVBITS) - 1
             self.suw = {}                          # per-word usefulness score (arm sel; EWMA of own-vote agreement)
@@ -426,6 +428,8 @@ class Model:
             self.sel_T = []                        # candidate indices of the served vote set
             self.sel_f = 0.0; self.sel_cx = 0      # per-bit stretch(p_sel) and its context cell
             self.sel_gk = None                       # the gate key (cx) used for the byte being served
+        if arm in SEL_ARMS and arm not in getattr(self, "_sel_init_done", ()) :
+            pass
             self.sel_r = [0.0] * SD                # pooled features r = sum_k a_k E_k
             self.sel_uwacc = 0.0                   # per-byte sum of |vsw| (usefulness weighting)
             self.sel_Gr = [0.0] * SD               # per-byte dL/dr (mixer weights at predict time)
@@ -696,7 +700,7 @@ class Model:
             # §81: per-bit dL/dr at predict-time mixer weights (the vote needs no a-credit:
             # the gate is not a function of the vectors)
             g = p - y
-            base = self.NM + M + 1; w = self.w; Gr = self.sel_Gr
+            base = self.sel_rbase; w = self.w; Gr = self.sel_Gr
             for j in range(SD):
                 Gr[j] += g * w[base + j]
             # usefulness signal: EVERY candidate's own log-likelihood on this bit
