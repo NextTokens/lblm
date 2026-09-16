@@ -1026,8 +1026,9 @@ fn main() {
     let whole = tot / n as f64;
     let last = if tailn > 0 { tail / tailn as f64 } else { 0.0 };
     println!("corpus={}  bytes={}  bits={}  obits={}", path, raw.len(), n, obits);
-    println!("  flags: BLSTRIPW={} BLSTRIPH={} BLMSLOTS={} BLSOFT={} NSLOTS={} BLPVEC={} BLWNS={} BLNSALL={} LR_S={}",
-             strip_w as u8, strip_h as u8, use_slots as u8, blsoft as u8, nslots, blpvec, blwns as u8, ns_all as u8, lr_s);
+    println!("  flags: BLSTRIPW={} BLSTRIPH={} BLMSLOTS={} BLSOFT={} NSLOTS={} BLPVEC={} BLWNS={} BLNSALL={} LR_S={} BLSEL={} NSELSLOTS={} SELSENT={}",
+             strip_w as u8, strip_h as u8, use_slots as u8, blsoft as u8, nslots, blpvec, blwns as u8, ns_all as u8, lr_s,
+             blsel as u8, nselslots, selsent);
     println!("  blmrs-strong  whole-stream = {:.6}   last-20% = {:.6}  bits/bit   [{:.1}s, {:.1} Mbits/s]",
              whole, last, secs, (n as f64 / 1e6) / secs);
 }

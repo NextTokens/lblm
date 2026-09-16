@@ -3874,8 +3874,10 @@ recovers the pre-§83 engine bit-identically; new 300 KB reference 0.231282): th
 carries a learned long-range binding channel by default. Honest scope: text corpora gain
 +0.00005–0.00012 (0.02–0.06 %), code ties — the engine's word models plus match own code, as
 the instrument predicted (§81: code's binding value was real but the engine's word-family
-absorbs it). Cost ~5–15 % wall time. Full-enwik8 headline with the new defaults: §83 addendum
-below once the run lands.
+absorbs it). Cost ~5–15 % wall time. Full-enwik8 headline with the new defaults (obits 25, 68 min):
+**0.196021 bits/bit (19.60 MB)** — the adoption chain reads 0.199145 (§79 base) → 0.196841
+(`BLWNS`) → 0.196123 (`+BLPVEC`) → **0.196021 (`+BLSEL` N16 SENT0)**; −1.6 % total from the
+forgetting-and-binding arc alone.
 
 ---
 
