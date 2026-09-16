@@ -1,5 +1,15 @@
 # HANDOVER — the LBLM intelligence track, post-§81
 
+> **§84 update (2026-09-16) — the bigram revision:** an interpretability probe (what does
+> the gate select on real text?) showed the top pick is almost always the PREVIOUS WORD —
+> and N-controls confirmed it: NSELSLOTS=1/2 beat N=16 by ~7× (deep candidates dilute).
+> The channel's production value is a learned (word × 3-byte-context) vote — a better
+> word-bigram than the engine had — not long-range binding (which the engine's word family
+> absorbs). Re-adopted `NSELSLOTS=2 SELVBITS=23 SELUBITS=23`: uniform ~+0.0003 on all four
+> corpora incl. held-out enwik8 tail AND code (previously tying); **full enwik8 headline
+> 0.195780 (19.58 MB)**. New 300 KB reference 0.230863; `BLSEL=0` recovers the no-selector
+> engine bit-identically. Details: ledger §84.
+>
 > **§83 update (2026-09-15):** replicated (held-out enwik8 tail +0.000048/+0.000064),
 > swept, and ADOPTED: `BLSEL=1 NSELSLOTS=16 SELSENT=0` are now the strong.exe defaults
 > (`BLSEL=0` recovers the pre-§83 engine bit-identically; 300 KB reference 0.231282).

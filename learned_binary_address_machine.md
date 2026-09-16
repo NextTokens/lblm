@@ -3881,6 +3881,58 @@ forgetting-and-binding arc alone.
 
 ---
 
+## 84. What the channel actually is — the bigram revision, and the re-adoption that followed (`_what_binds.py`, `NSELSLOTS` controls)
+
+Three questions, one answer that revised §82–§83.
+
+**A. The knob sweep plateaued.** At the §83 config (N=16, whole-stream scope), every knob sits
+within ±0.000005 on corpus_big (TOPM 2/8, VORD 2/4, N 8/24, tables 23) — the adopted settings
+looked near-optimal. On enwik8-30MB only the bigger tables moved anything (b23 0.202561 vs
+0.202601).
+
+**B. The what-binds probe** (instrument `sellean`, trained 1.2 MB wt103, frozen, 11,718 sampled
+selections on held-out text): the gate's **top pick is the preceding word itself** in almost
+every sample ("on → on", "Zaza → zaza", "starred → starred"); second/third picks carry
+relational structure ("in → cast, was"; "role → starring, guest"); aggregate stats barely move
+(recurrence@40w: 27.3% selected vs 26.1% random vs 28.2% most-recent). The channel had largely
+learned a **context-enriched word-bigram vote**: the previous word's cells at the 3-byte
+context predict what follows it.
+
+**C. The controls confirmed the probe — and overturned the adopted depth** (corpus_big, over
+the no-selector baseline 0.215536): `NSELSLOTS=1` +0.000164 (0.215372), **`N=2` +0.000267
+(0.215224)**, N=3 0.215319, N=4 0.215398, N=16 +0.000045 (the §83 config). The value is at
+depth ≤ 2; deeper candidates DILUTE (N=16 loses 0.00015 to N=2). §82/§83's depth-16 "binding"
+channel was mostly dilution around a shallow vote.
+
+**Re-adoption (`NSELSLOTS=2`, `SELVBITS=SELUBITS=23`), validated on all four corpora:**
+
+| corpus | no selector | N=2 + b23 | gain |
+|---|---|---|---|
+| corpus_big 11 MB | 0.215536 | **0.215120** | **+0.000416** |
+| enwik8 first 30 MB | 0.202723 | 0.202400 | +0.000323 |
+| enwik8 last 30 MB (held out) | 0.201627 | 0.201343 | +0.000284 |
+| stdlib 10.6 MB (code) | 0.125011 | **0.124701** | **+0.000310** |
+
+Uniform ~+0.0003 everywhere — including **code, which tied at N=16**: the dilution had been
+hiding the code gains too. New 300 KB reference 0.230863. `BLSEL=0` still recovers the
+no-selector engine bit-identically.
+
+**The honest revision, stated plainly.** The production value of the §81–§83 channel is not
+long-range binding; it is **a learned (word × 3-byte-context) vote read through
+context-selected weights** — a better word-bigram than the engine had (`wdc2` lacks the middle
+context; `wdc` keys only the current prefix). The engine's own word family absorbs the deep
+binding the instrument measured (§81's B1 stands as instrument truth; §75's absorber law
+refined: what the engine lacked was never binding capacity but this shallow vote). The
+instrument-first, probe-then-control method did exactly its job: the interpretability probe
+predicted the N-controls before they ran. Full-enwik8 headline with the corrected defaults (obits 25, 82 min):
+**0.195780 bits/bit (19.58 MB)** — the corrected channel contributes −0.000343 on the full file
+(3.4× the N=16 config's −0.000102). The adoption chain now reads 0.199145 (§79 base) →
+0.196841 (`BLWNS`) → 0.196123 (`+BLPVEC`) → 0.196021 (`+BLSEL` N16, §83) → **0.195780
+(`N=2` + b23, §84)**; −1.7 % total from the forgetting-and-vote arc, every step online and
+adopted only after beating the previous default on held-out data.
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").

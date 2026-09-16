@@ -101,7 +101,7 @@ const SELW: usize = NWMAX + 1;      // §82 storage width with BLSEL (one more i
 
 // ---- §82 the lean selector port (wstate.py v10 §81; env BLSEL, default OFF = bit-identical) ----
 const SELSMAX: usize = 64;   // max word-slot depth (active = NSELSLOTS, default 32)
-const SEL_TOPM: usize = 4;   // vote-set size
+const SEL_TOPM: usize = 8;    // MAX vote-set size (active = env SELTOPM, default 4)
 const SEL_UGAIN: f64 = 4.0;  // gate gain on usefulness
 const SEL_PBD: f64 = 0.05;   // position (recency) bias per slot step
 const SEL_TSC: f64 = 2.0;    // softmax temperature
@@ -314,9 +314,9 @@ fn main() {
     // DEFAULT ON since the §83 owner adoption (gains on all text corpora incl. held-out
     // enwik8 tail; tie on code; §80 standing directive). BLSEL=0 recovers the pre-§83 engine.
     let blsel = env::var("BLSEL").map(|s| s != "0").unwrap_or(true);
-    let nselslots: usize = (envf("NSELSLOTS", 16.0) as usize).clamp(1, SELSMAX);
-    let selvbits: u32 = envf("SELVBITS", 22.0) as u32;
-    let selubits: u32 = envf("SELUBITS", 22.0) as u32;
+    let nselslots: usize = (envf("NSELSLOTS", 2.0) as usize).clamp(1, SELSMAX);   // §84: value is at depth <=2; deeper candidates dilute
+    let selvbits: u32 = envf("SELVBITS", 23.0) as u32;   // §84: 2^23 vote cells (bigger corpora need them)
+    let selubits: u32 = envf("SELUBITS", 23.0) as u32;
     let sel_ugain = envf("SELUGAIN", 4.0);    // §83 sweep knobs (§81 defaults shown)
     let sel_pbd = envf("SELPBD", 0.05);
     let sel_tsc = envf("SELTSC", 2.0);
@@ -327,6 +327,9 @@ fn main() {
     // §83 sweep verdict: whole-stream scope (0) beats sentence scope on every text corpus --
     // the CONTEXTUAL usefulness self-corrects the cross-sentence pollution §81 had to scope away.
     let selsent: u32 = envf("SELSENT", 0.0) as u32;
+    let seltopm: usize = (envf("SELTOPM", 4.0) as usize).clamp(1, SEL_TOPM);   // §84 sweep
+    let selvord: u32 = envf("SELVORD", 3.0) as u32;      // §84: vote/gate context width in bytes
+    let selctxmask: u64 = if selvord >= 8 { u64::MAX } else { (1u64 << (8 * selvord)) - 1 };
     let mut sent_ctr: u32 = 0;
     // DEFAULT 2 since the §80 owner adoption of the §79 result (enwik8 0.199145 -> 0.196123,
     // decodability verified §79R); set BLPVEC=0 to recover the pre-§80 engine bit-identically.
@@ -410,7 +413,7 @@ fn main() {
     let mut selut: Vec<f64> = if blsel { vec![0.0f64; selusz] } else { Vec::new() };  // usefulness u[(ctx3,word)]
     let mut sel_nc = 0usize;                           // current candidates (packed in sl2[0..sel_nc])
     let mut sel_gk: u64 = 0;                           // the gate ctx3 used for the byte being served
-    let mut sel_T = [0usize; SEL_TOPM];                // candidate indices of the vote set
+    let mut sel_T = [0usize; SEL_TOPM];   // SEL_TOPM is the MAX (8)                // candidate indices of the vote set
     let mut sel_nT = 0usize;                           // vote-set size
     let mut sel_wT = [0.0f64; SELSMAX];                // renormalised mixture weight per T member
     let mut sel_ix = [0usize; SELSMAX];                // per-bit vote-cell indices (all candidates)
@@ -555,7 +558,7 @@ fn main() {
         // context-selected weight). Reads EVERY candidate's cell (cells train for all, §81).
         if blsel {
             if sel_active && sel_nc > 0 {
-                let ctx3 = htail & 0xFF_FFFF;
+                let ctx3 = htail & selctxmask;
                 for j in 0..sel_nc {
                     let h = sl2[j].wrapping_mul(0x9E37_79B9_7F4A_7C15)
                         ^ ctx3.wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
@@ -960,7 +963,7 @@ fn main() {
             }
             // §82: forward -- the query-free gate over the CURRENT (post-LRU) slots -> serves the next byte
             if blsel {
-                let ctx3 = htail & 0xFF_FFFF;
+                let ctx3 = htail & selctxmask;
                 sel_gk = ctx3;
                 if sel_nc > 0 {
                     let mut e = [0.0f64; SELSMAX];
@@ -977,7 +980,7 @@ fn main() {
                     let mut a = [0.0f64; SELSMAX];
                     for j in 0..sel_nc { let ex = ((e[j] - mx) / sel_tsc).exp(); a[j] = ex; z += ex; }
                     for j in 0..sel_nc { a[j] /= z; }
-                    sel_nT = SEL_TOPM.min(sel_nc);
+                    sel_nT = seltopm.min(sel_nc);
                     let mut taken = [false; SELSMAX];
                     let mut at = 0.0f64;
                     for t in 0..sel_nT {
