@@ -1,5 +1,13 @@
 # HANDOVER — the LBLM intelligence track, post-§81
 
+> **§83 update (2026-09-15):** replicated (held-out enwik8 tail +0.000048/+0.000064),
+> swept, and ADOPTED: `BLSEL=1 NSELSLOTS=16 SELSENT=0` are now the strong.exe defaults
+> (`BLSEL=0` recovers the pre-§83 engine bit-identically; 300 KB reference 0.231282).
+> The scope discovery: whole-stream binding (never clear the LRU) beats §81's sentence
+> scope on every text corpus — the contextual usefulness self-corrects cross-sentence
+> pollution at the gate. Gains: enwik8-30MB +0.000122, held-out tail +0.000064,
+> corpus_big +0.000045, stdlib tie. Details: ledger §83.
+>
 > **§82 update (2026-09-15):** the §81 lean selector is ported to the engine (`BLSEL=1`,
 > default OFF, bit-identical) and **beats strong itself** — the port rule met for the first
 > time by a learned-memory channel: corpus_big 0.215536 → 0.215499 (+0.000037), enwik8-30MB

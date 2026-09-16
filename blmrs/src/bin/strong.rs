@@ -311,10 +311,23 @@ fn main() {
     // §82: the §81 lean selector, ported. Sentence-scoped word LRU + full-weight vote cells for
     // ALL candidates + a query-free contextual-usefulness gate + the vote fed to ALL THREE mixers
     // (the §78.3 placement). Default OFF = bit-identical; NSELSLOTS/SELVBITS/SELUBITS tune it.
-    let blsel = env::var("BLSEL").map(|s| s == "1").unwrap_or(false);
-    let nselslots: usize = (envf("NSELSLOTS", 32.0) as usize).clamp(1, SELSMAX);
+    // DEFAULT ON since the §83 owner adoption (gains on all text corpora incl. held-out
+    // enwik8 tail; tie on code; §80 standing directive). BLSEL=0 recovers the pre-§83 engine.
+    let blsel = env::var("BLSEL").map(|s| s != "0").unwrap_or(true);
+    let nselslots: usize = (envf("NSELSLOTS", 16.0) as usize).clamp(1, SELSMAX);
     let selvbits: u32 = envf("SELVBITS", 22.0) as u32;
     let selubits: u32 = envf("SELUBITS", 22.0) as u32;
+    let sel_ugain = envf("SELUGAIN", 4.0);    // §83 sweep knobs (§81 defaults shown)
+    let sel_pbd = envf("SELPBD", 0.05);
+    let sel_tsc = envf("SELTSC", 2.0);
+    let sel_udc = envf("SELUDC", 0.995);
+    // §83 binding scope: clear the candidate set every k-th '.' (1 = §81 sentence scope;
+    // 0 = never clear = whole-stream LRU). Stale words' cells pollute, but the CONTEXTUAL
+    // usefulness is expected to self-correct at the gate -- this is the experiment.
+    // §83 sweep verdict: whole-stream scope (0) beats sentence scope on every text corpus --
+    // the CONTEXTUAL usefulness self-corrects the cross-sentence pollution §81 had to scope away.
+    let selsent: u32 = envf("SELSENT", 0.0) as u32;
+    let mut sent_ctr: u32 = 0;
     // DEFAULT 2 since the §80 owner adoption of the §79 result (enwik8 0.199145 -> 0.196123,
     // decodability verified §79R); set BLPVEC=0 to recover the pre-§80 engine bit-identically.
     if blpvec > 2 {
@@ -828,7 +841,7 @@ fn main() {
                         if adv > 1.0 { adv = 1.0; } else if adv < -1.0 { adv = -1.0; }
                         let h = sel_mix(sel_gk ^ sl2[j].wrapping_mul(0x9E37_79B9_7F4A_7C15));
                         let ui = ((h >> (64 - selubits)) as usize) & selumask;
-                        let mut u = selut[ui] * SEL_UDC + (1.0 - SEL_UDC) * wu * adv;
+                        let mut u = selut[ui] * sel_udc + (1.0 - sel_udc) * wu * adv;
                         if u > SEL_UCLIP { u = SEL_UCLIP; } else if u < -SEL_UCLIP { u = -SEL_UCLIP; }
                         selut[ui] = u;
                     }
@@ -837,9 +850,13 @@ fn main() {
             if blsel {
                 for j in 0..SELSMAX { sel_ll[j] = 0.0; }
                 sel_uw = 0.0;
-                if b == 46 {                     // sentence scoping (§81: cross-sentence pollution)
-                    for j in 0..SELSMAX { sl2[j] = 0; }
-                    sel_nc = 0;
+                if b == 46 {                     // §81 sentence scoping / §83 scope knob
+                    sent_ctr = sent_ctr.wrapping_add(1);
+                    if selsent >= 1 && sent_ctr >= selsent {
+                        sent_ctr = 0;
+                        for j in 0..SELSMAX { sl2[j] = 0; }
+                        sel_nc = 0;
+                    }
                 }
             }
             if (65..=90).contains(&b) || (97..=122).contains(&b) {
@@ -951,14 +968,14 @@ fn main() {
                     for j in 0..sel_nc {
                         let h = sel_mix(ctx3 ^ sl2[j].wrapping_mul(0x9E37_79B9_7F4A_7C15));
                         let ui = ((h >> (64 - selubits)) as usize) & selumask;
-                        let mut ev = SEL_UGAIN * selut[ui] - SEL_PBD * j as f64;
+                        let mut ev = sel_ugain * selut[ui] - sel_pbd * j as f64;
                         if ev > 12.0 { ev = 12.0; } else if ev < -12.0 { ev = -12.0; }
                         e[j] = ev;
                         if ev > mx { mx = ev; }
                     }
                     let mut z = 0.0f64;
                     let mut a = [0.0f64; SELSMAX];
-                    for j in 0..sel_nc { let ex = ((e[j] - mx) / SEL_TSC).exp(); a[j] = ex; z += ex; }
+                    for j in 0..sel_nc { let ex = ((e[j] - mx) / sel_tsc).exp(); a[j] = ex; z += ex; }
                     for j in 0..sel_nc { a[j] /= z; }
                     sel_nT = SEL_TOPM.min(sel_nc);
                     let mut taken = [false; SELSMAX];

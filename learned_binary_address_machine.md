@@ -3839,6 +3839,46 @@ beats the engine itself. The strain's first learned-memory channel is now engine
 
 ---
 
+## 83. Replication, sweep, and the scope discovery — the selector adopted (`SELSENT=0`, `NSELSLOTS=16`)
+
+Three pre-named follow-ups, run to completion. Baselines = the §80 defaults; gains below are
+whole-stream bits/bit ×10⁻⁶ vs each corpus's baseline.
+
+**(1) Held-out replication** (enwik8 **last** 30 MB — data untouched by every earlier decision;
+its default run reproduces 79H's 0.201627 exactly): `BLSEL=1` +0.000048 (0.201579);
+`NSELSLOTS=16` +0.000064 (0.201563). **The §82 port result replicates on held-out data.**
+
+**(2) Engine-scale sweep** (corpus_big; knobs env-ized, defaults bit-identical before the runs):
+sentence scope and the §81 hyperparameters are good but not optimal — `SELPBD=0.02` +0.000043,
+`SELUGAIN=8` +0.000040, `NSELSLOTS=16` +0.000045, `SELUDC=0.999` −0.000004 (worse),
+`SELTSC=1`/`NSELSLOTS=64` neutral. Interactions are small (best pair `UG8+N16` +0.000047).
+
+**(3) The scope discovery — `SELSENT=0` (never clear; whole-stream 16/32-word LRU) beats
+sentence scope everywhere on text**: corpus_big 0.215480 (+0.000056) vs sentence scope's
+0.215499. §81's sentence scoping was a patch for the *pre-contextual* usefulness design; with
+u keyed by (3-byte context, word), stale words' cells do pollute — but their advantage sinks and
+**the gate demotes them on its own**. The binding scope is the whole stream; cross-sentence
+entity continuity is part of what the channel now captures.
+
+**Final configuration validated cross-corpus** (`NSELSLOTS=16`, `SELSENT=0`):
+
+| corpus | baseline | final config | gain |
+|---|---|---|---|
+| enwik8 first 30 MB | 0.202723 | **0.202601** | **+0.000122** |
+| enwik8 last 30 MB (held out) | 0.201627 | 0.201563 | +0.000064 |
+| corpus_big 11 MB | 0.215536 | 0.215491 | +0.000045 |
+| stdlib 10.6 MB | 0.125011 | 0.125012 | tie (−0.000001) |
+
+**Adopted as the strong.exe defaults** under the owner's §80 standing directive (`BLSEL=0`
+recovers the pre-§83 engine bit-identically; new 300 KB reference 0.231282): the engine now
+carries a learned long-range binding channel by default. Honest scope: text corpora gain
++0.00005–0.00012 (0.02–0.06 %), code ties — the engine's word models plus match own code, as
+the instrument predicted (§81: code's binding value was real but the engine's word-family
+absorbs it). Cost ~5–15 % wall time. Full-enwik8 headline with the new defaults: §83 addendum
+below once the run lands.
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").
