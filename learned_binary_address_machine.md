@@ -4602,7 +4602,26 @@ never their product alone**.
 
 **The cross-rung caveat, stated before the reading.** `e = f − f_without_cue` shrinks mechanically as `T`
 grows (dropping 1 of 32 moves the mixture less than 1 of 4), so the magnitudes are not comparable across
-rungs; only the sign change and the bits/byte column are. The clean test is within one run:
+rungs; only the sign change and the bits/byte column are.
+
+**Two controls make the comparison cleaner than it looks.** First, **`SEL_TOPM` changes only what is read,
+never what is learned**: the count update runs over every resident candidate (`sel_keysall`), not over the
+served set, and the counts are driven by the true bit, so the vote cells are byte-for-byte identical across
+the whole ladder. Measured: `LA` = **5.081 at every rung** on a fixed event set. Second, restricting every
+rung to the **5,677 events that `WSELTOPM = 4` itself serves** — same events, same cues, same cells, only the
+mixture differing — the sign change survives:
+
+| `WSELTOPM` | mean *e* on the fixed event set | `LA` | served gain (bits) |
+|---|---|---|---|
+| 4 | **−0.3587** | 5.081 | −0.00462 |
+| 8 | **+0.0347** | 5.081 | +0.00021 |
+| 16 | +0.0269 | 5.081 | +0.00145 |
+| 32 | +0.0178 | 5.081 | +0.00153 |
+
+So the entire effect is selection: the same memory, read differently. On this fixed set the **served gain in
+bits also turns positive** (−0.00462 → +0.00153), which the all-events figure hides.
+
+The clean test of *why* is within one run:
 
 **At `WSELTOPM = 32` every resident cue is served, so the gate no longer decides who is read — but its weight
 is still recorded.** Splitting the identical 26,204 events by the gate's own preference:
