@@ -22,6 +22,12 @@
 > **Probe results do not transfer by default:** the reliability-bucketed readout is decisive on the probe,
 > the *worst* arm on real text, and near-noise in the engine. Fast trust transfers; bucketing does not.
 >
+> **Collisions destroy specific memories but help aggregate compression (§86.8).** A bigger, less-colliding
+> instrument table is WORSE on corpora (stdlib 2.1150 → 2.1181 at 2^26) while it revives every dead fact on the
+> probe and tagging pays in the engine. Merging keys is fatal to one fact and mild backoff in aggregate; the
+> regimes separate by data per cell. Consequence: corpus bits/byte can reward the very defect that destroys a
+> specific memory — binding claims on real data need a fact-level recall measure, not a compression measure.
+>
 > **Method lesson, twice learned:** a metric over a whole channel does not measure the part under test.
 > §86's registered metric passed arms whose binding was actively harmful; the cue-attributable
 > counterfactual is the correct one and is what every §86 number above uses.

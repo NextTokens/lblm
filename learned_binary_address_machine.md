@@ -4094,9 +4094,9 @@ Lean arms, standard gate, nonstationary rail (§78.2), seed 0. Gain vs the rail 
 |---|---|---|---|
 | `sellean` (§81's arm, no learned selection) | −0.0001 / +0.0026 / +0.0039 | −0.0057 / +0.0008 / +0.0041 | −0.0087 / −0.0032 / −0.0038 / −0.0022 |
 | **`selleanu`** (learned selection restored) | **+0.0025 / +0.0056 / +0.0073** | −0.0044 / +0.0025 / **+0.0062** | −0.0090 / −0.0027 / −0.0026 / −0.0013 |
-| `selleanfa` (+ fast trust) | (pending) | −0.0038 / +0.0033 / **+0.0060** | −0.0084 / −0.0016 / −0.0023 / −0.0015 |
+| `selleanfa` (+ fast trust) | +0.0033 / +0.0051 / +0.0060 | −0.0038 / +0.0033 / **+0.0060** | −0.0084 / −0.0016 / −0.0023 / −0.0015 |
 | `selleanrb` (+ reliability buckets) | −0.0013 / +0.0029 / +0.0042 | −0.0203 / −0.0069 / −0.0004 | −0.0322 / −0.0224 / −0.0174 / −0.0117 |
-| `selleanrbfa` (both) | (pending) | −0.0103 / −0.0024 / +0.0028 | −0.0270 / −0.0129 / −0.0093 / −0.0062 |
+| `selleanrbfa` (both) | +0.0012 / +0.0041 / +0.0040 | −0.0103 / −0.0024 / +0.0028 | −0.0270 / −0.0129 / −0.0093 / −0.0062 |
 
 - **Learned selection does pay on real text**, and by more than §81 claimed with the wrong arm: `selleanu`
   beats `sellean` at every size on all three corpora, and nearly doubles §81's headline wt103 crossing
@@ -4107,6 +4107,8 @@ Lean arms, standard gate, nonstationary rail (§78.2), seed 0. Gain vs the rail 
   not an even partition). Splitting a shared readout weight helps when the stream is half unfamiliar by
   construction, and costs training signal when it is not.
 - Code never crosses the rail, as in §81.
+- On wt103 every selector arm crosses at 1.2 MB and above, and `selleanfa` is second only to
+  `selleanu` (+0.0060 vs +0.0073 at 2.7 MB) — fast trust is the one §86 fix that helps on all three corpora.
 
 ### 86.4 The engine's memory is collision-bound, not capacity-bound
 
@@ -4207,11 +4209,39 @@ OFF; adoption is the owner's decision under the §80 precedent, in its own revie
   context is novel and inverts its memory readout, saving 5–7 bits before it has any fact to recall (§86.2).
 - **Probe results do not transfer by default.** The reliability-bucketed readout is decisive on the probe, the
   worst arm on real text, and near-noise in the engine (§86.3). Fast trust transfers; bucketing does not.
-- **Open, in order of value:** (1) a registered replication of the collision finding, and a tagged or checksummed
-  vote cell in the *instrument* (the engine has one now); (2) does an adequately addressed memory change the §81
-  corpus verdict — every corpus number to date was measured on a colliding table; (3) whether the novelty
-  detector is useful on its own; (4) the §85 lesson, now twice-learned: a metric over a whole channel does not
-  measure the part of the channel under test.
+- **Open, in order of value:** (1) a registered replication of the collision finding (§86.5 was post-hoc);
+  (2) whether the novelty detector of §86.2 is useful on its own; (3) a fact-level instrument for corpus text —
+  §86.8 shows corpus bits/byte can reward the very defect that destroys a specific memory, so binding claims on
+  real data need a recall measure, not a compression measure; (4) the §85 lesson, now twice-learned: a metric
+  over a whole channel does not measure the part of the channel under test.
+- **Answered this session:** a better-addressed instrument table does NOT improve the corpus verdict (§86.8).
+
+### 86.8 Collisions destroy specific memories while helping aggregate compression
+
+The §86.7 open question — every corpus number to date was measured on a colliding 2^22 instrument table, so
+does fixing the addressing change the corpus verdict? — was run, and the answer is **no, and the sign is
+opposite to the engine's**:
+
+| `selleanu`, instrument vote table | 2^22 | 2^24 | 2^26 |
+|---|---|---|---|
+| stdlib 2400 KB (rail 2.1212) | **2.1150** | 2.1201 | 2.1181 |
+| wt103 2700 KB (rail 2.2861) | **2.2788** | 2.2818 | — |
+
+A bigger, less-colliding table is **worse** on both corpora, while on the probe (§86.5) enlarging the same table
+revived every dead fact, and in the engine at 11–100 MB tagging is worth up to +0.00094.
+
+These are consistent, and the reconciliation is the day's sharpest statement about this machine. A collision
+merges two unrelated (word, context) keys into one cell. For a *specific* memory that is fatal: the cell's
+majority bit flips against its owner's truth and the fact is erased (§86.5). For *aggregate* compression on a
+2–3 MB stream it is mild backoff: most cells are sparse, and sharing counts across keys smooths the estimate
+more than the occasional corruption costs. The regimes separate by data per cell — at engine scale (11–100 MB)
+cells have enough evidence that merging only corrupts, which is why tagging pays there and hurts nothing.
+
+**Consequence for the intelligence path.** Compression on a corpus is a poor instrument for the question this
+track is about: the same defect that destroys a machine's ability to recall a particular fact can *improve* its
+bits-per-byte. Reliable recall of specific facts and aggregate compression are not the same objective, and where
+they conflict this section is the evidence. Probe-style, fact-level measurement is the right instrument for
+binding claims; corpus bits/byte is the right instrument for production claims; neither substitutes for the other.
 
 ---
 
