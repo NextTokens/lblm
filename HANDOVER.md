@@ -24,26 +24,31 @@
 > significantly negative (−0.00462 [−0.00897, −0.00038]); the repaired cell still codes the fact's identity
 > byte at 5.105 bits against the plain rail's 3.746.
 >
-> **§89A ran, and it is the session's most consequential result.** Laddering `WSELTOPM` over {4, 8, 16, 32}
-> with the tag on: reach at g ≥ 6 goes 0.012 → 1.000, and the machine's fact memory crosses from
-> significantly **negative** (−0.0777 [−0.1038, −0.0549]) to significantly **POSITIVE**
-> (**+0.0409 [+0.0168, +0.0603]**) — the first net-informative fact memory this project has measured on real
-> text with an interval excluding zero. **And it is free:** bits/byte *improves* monotonically
-> (2.246269 → 2.242265), beating both the untagged shipped configuration (2.244060) and the rail (2.253037).
-> So §89's "the instrument must choose" is too broad — the choice is forced by the *addressing* lever, not the
-> *selection* one.
+> **§89A — the first configuration where better memory and better compression coexist.** Laddering
+> `WSELTOPM` over {4, 8, 16, 32} with the tag on: reach at g ≥ 6 goes 0.012 → 1.000, and on the `|T|`-matched
+> within-event contrast (the cue against its served frequency-matched partner, same event, same bits, same
+> mixture size) the cue goes from **−0.1030 [−0.3009, +0.0948] to +0.1338 [+0.0950, +0.1687]**. bits/byte
+> improves monotonically to 2.242265. **Tagged + `WSELTOPM = 32` beats untagged + `WSELTOPM = 4` on BOTH axes
+> at once** (`LA` 5.081 vs 7.261; bpb 2.242265 vs 2.244060) — the first time in this project. Cost: **+2.6 %
+> wall time, zero memory.** The intervention is surgically clean: the vote cells are bit-identical at all four
+> rungs, so nothing is learned differently, only read differently.
 >
-> **Why the shipped gate was wrong, measured within one run.** At `WSELTOPM = 32` every cue is served, so the
-> gate no longer decides — but its weight is still recorded. Splitting the identical 26,204 events by it:
-> the quartile the gate most wants (Q4) is the **only one whose evidence is not positive** (−0.0238), while
-> Q3 is the best (+0.0892 [+0.0698, +0.1049]). Q4's cells are the most *accurate* (`LA` 5.313) and the least
-> *useful*, because its mean distance is 3.9 words — a cue three words back is one the order models already
-> cover. **The gate optimises accuracy and recency; the mixture needs marginal information.**
+> **Three corrections the red-team forced, all mine.** (1) The compression gain is a **tag × width
+> interaction** — the untagged ladder goes the other way (2.244060 → 2.244480), so "selection moves both
+> together" is false in general. (2) The ladder's negative left end is carried by empty and mis-owned cells
+> at `|T| = 4` (112.5 % of it), not by anti-informative memory. (3) Only about half is fact-specific
+> (+0.0218 [+0.0109, +0.0344]); the same cue crosses against a neighbouring non-fact outcome too.
 >
-> **Next: the readout**, §87's untouched third limit. The served gain in bits is still ≈ 0 at fact outcomes
-> (−0.00003) even at `WSELTOPM = 32`. §86.3 says the bucketed fix is the worst arm on real text, so it must be
-> per-word or per-cell.
-
+> **WITHDRAWN IN FULL: "the gate was serving the cues whose memory was least needed."** That was Simpson's
+> paradox — `a_cue` is 0.89-correlated with the softmax denominator (sentence length) and `|e|` scales as
+> `1/cand_n`. Hold it fixed and the ordering reverses; on the within-event control the gate's ordering is
+> monotone **in its favour**, and its learned term predicts better evidence in 13 of 13 cells. **The shipped
+> gate selects well; what limited it was how few it was allowed to serve.**
+>
+> **Next: the readout** — §87's untouched third limit. The served gain in bits at fact outcomes is still ≈ 0
+> even at `WSELTOPM = 32`. §86.3 says the bucketed fix is the worst arm on real text, so it must be per-word
+> or per-cell.
+>
 ---
 
 # Previous state (post-§87)

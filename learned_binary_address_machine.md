@@ -4605,80 +4605,78 @@ be treated as §86.5 was — a finding that still needs its own registration.
   answer that question. The first draft's "the engine can have the memory and the compression; the instrument
   must choose" is withdrawn as unlicensed.
 
-### 89.3 §89A, the selection ladder: the gate was serving the cues whose memory was least needed
+### 89.3 §89A, the selection ladder: the first configuration where better memory and better compression coexist
 
 With addressing bought for 4 MB, §87's second limit is the binding one: the cue is in the slot LRU on 100 % of
 fact events but in the served vote set on 21 %, and beyond nine words on 0.15 %. §89A ladders `WSELTOPM`
-(v13's env knob for `SEL_TOPM`) over {4, 8, 16, 32} at `WVBITS2 = 22` **with `WSELTAG=1`**, so the memory is
-§89B's good one and only selection varies. Registered in `scratchpad/p87/prereg_89A.md` before any rung ran,
-with the estimand amended — after §87's lesson — to **the pair `(P(served), E[e | served])` reported together,
-never their product alone**.
+(v13's env knob for `SEL_TOPM`) over {4, 8, 16, 32} at `WVBITS2 = 22` **with `WSELTAG=1`**, so only selection
+varies. Registered in `scratchpad/p87/prereg_89A.md` before any rung ran, with the estimand amended — after
+§87's lesson — to **the pair `(P(served), E[e | served])` reported together, never their product alone**.
 
-| `WSELTOPM` | `P(served)` | `P(served \| g ≥ 6)` | `E[e \| served]` | mean *e* (95 % CI) | served gain | **bits/byte** |
+**The intervention is surgically clean.** `WSELTOPM`'s only executable effect is the top-M truncation in
+`_sel_forward`; the count update runs over every resident candidate and is driven by the true bit, so **the
+vote cells are bit-identical at all four rungs** (counts, `p1_cue` and `LA` identical on 26,204/26,204 fact
+rows; the eviction count identical at 206,269,075). Every run scores the identical 384,257 of 911,360 bytes.
+Nothing is learned differently; only what is *read* changes. Real cost: **+2.6 % wall time and zero memory.**
+
+| `WSELTOPM` | `P(served)` | `P(served \| g ≥ 6)` | `E[e \| served]` | mean *e* | fact − C-MATCH, within-event | **bits/byte** |
 |---|---|---|---|---|---|---|
-| 4 (shipped) | 0.2166 | 0.0117 | −0.3587 | −0.0777 [−0.1038, −0.0549] | −0.00100 | 2.246269 |
-| 8 | 0.5497 | 0.2445 | −0.0029 | −0.0016 [−0.0264, +0.0187] | −0.00087 | 2.243713 |
-| 16 | 0.8972 | 0.8212 | +0.0450 | **+0.0404 [+0.0155, +0.0604]** | −0.00014 | 2.242631 |
-| 32 | 1.0000 | 1.0000 | +0.0409 | **+0.0409 [+0.0168, +0.0603]** | −0.00003 | **2.242265** |
+| 4 (shipped) | 0.2166 | 0.0117 | −0.3587 | −0.0777 | −0.1030 [−0.3009, +0.0948] | 2.246269 |
+| 8 | 0.5497 | 0.2445 | −0.0029 | −0.0016 | — | 2.243713 |
+| 16 | 0.8972 | 0.8212 | +0.0450 | +0.0404 | — | 2.242631 |
+| 32 | 1.0000 | 1.0000 | +0.0409 | +0.0409 | **+0.1338 [+0.0950, +0.1687]** | **2.242265** |
 
 * **N1 — PASS.** Reach at `g ≥ 6` rises 0.0117 → 0.2445 → 0.8212 → 1.0000, ρ = +1.000.
-* **N2 — PASS on both clauses.** The unconditional mean crosses from significantly **negative** to
-  significantly **positive**, and the conditional term does not collapse — it *rises*, −0.3587 → +0.0450.
-  **This is the first time in this project that the machine's memory of a fact is net-informative on real
-  text with an interval that excludes zero.**
-* **N3 — and it is free.** bits/byte *improves* monotonically, 2.246269 → 2.242265, which also beats the
-  untagged shipped configuration (2.244060) and the rail (2.253037). **Unlike de-collision, enlarging the
-  served set moves memory and compression the same way.** §89.2's "the instrument must choose" is therefore
-  too broad and is corrected here: the choice is forced by the *addressing* lever, not by the *selection* one.
+* **N2 — PASS, on the right statistic.** The registered unconditional mean crosses from −0.0777 to +0.0409,
+  and the crossing is real rather than a rescaling artefact: on a fixed event set with bit-identical memory,
+  856 of 5,510 events flip sign per event (782 negative→positive against 74 the other way, McNemar χ² = 584),
+  which no positive rescale can produce, and the exactly `|T|`-invariant sign-mean crosses too
+  (−0.0109 [−0.0256, +0.0017] → +0.1728 [+0.1173, +0.2151]). **But the headline must be the `|T|`-matched,
+  fact-specific contrast**, which is stronger and immune to every scale objection: the cue against its served
+  frequency-matched partner, same event, same bits, same mixture size — **−0.1030 [−0.3009, +0.0948] at
+  `WSELTOPM = 4` to +0.1338 [+0.0950, +0.1687] at 32.**
+* **N3 — and this is §89A's real result.** bits/byte *improves* monotonically, 2.246269 → 2.242265
+  (reproduced to nine decimals by an independent re-run). **Tagged + `WSELTOPM = 32` beats untagged +
+  `WSELTOPM = 4` on BOTH axes at once** — `LA` 5.081 against 7.261 and bits/byte 2.242265 against 2.244060.
+  **That is the first configuration in this project where better fact-level memory and better compression
+  coexist**, and it is what §89A should be remembered for.
 
-**The cross-rung caveat, stated before the reading.** `e = f − f_without_cue` shrinks mechanically as `T`
-grows (dropping 1 of 32 moves the mixture less than 1 of 4), so the magnitudes are not comparable across
-rungs; only the sign change and the bits/byte column are.
+**Three corrections the red-team forced, all of them mine.**
 
-**Two controls make the comparison cleaner than it looks.** First, **`SEL_TOPM` changes only what is read,
-never what is learned**: the count update runs over every resident candidate (`sel_keysall`), not over the
-served set, and the counts are driven by the true bit, so the vote cells are byte-for-byte identical across
-the whole ladder. Measured: `LA` = **5.081 at every rung** on a fixed event set. Second, restricting every
-rung to the **5,677 events that `WSELTOPM = 4` itself serves** — same events, same cues, same cells, only the
-mixture differing — the sign change survives:
+1. **The compression gain is a tag × width INTERACTION, not a property of selection.** The cell §89A did not
+   run — the same ladder with `WSELTAG=0` — goes the *other* way: 2.244060 → 2.244257 → 2.244480, monotonically
+   worse. So "enlarging the served set moves memory and compression the same way" is false in general; it holds
+   only with the tag on. The draft's "the choice is forced by the addressing lever, not the selection one" was
+   asserted from a one-armed experiment and is withdrawn in favour of the 2 × 2 above.
+2. **The left end is not evidence that the memory is anti-informative.** 112.5 % of the −0.0777 comes from
+   cells that are empty (−0.0598) or actively wrong (−0.0277), whose dilution penalty is inflated four-fold by
+   the `|T| = 4` weight share; the informative cells already contribute +0.0097. The same empty cell costs
+   −1.43 at `|T| = 4` and −0.32 at `|T| = 32`. On the invariant statistic the left end does not exclude zero.
+3. **It is not specific to facts — about half of it is.** The identical crossing happens for the same cue word
+   scored against a *neighbouring non-fact* outcome (C-ELSEWHERE: −0.0699 → +0.0191; invariant sign-mean
+   −0.0174 → +0.1481). The fact-specific excess is **+0.0218 [+0.0109, +0.0344]**. §87.6's own method lesson,
+   recurring: a statistic aggregated over a channel does not measure the part under test.
 
-| `WSELTOPM` | mean *e* on the fixed event set | `LA` | served gain (bits) |
-|---|---|---|---|
-| 4 | **−0.3587** | 5.081 | −0.00462 |
-| 8 | **+0.0347** | 5.081 | +0.00021 |
-| 16 | +0.0269 | 5.081 | +0.00145 |
-| 32 | +0.0178 | 5.081 | +0.00153 |
+**WITHDRAWN IN FULL: "the gate was serving the cues whose memory was least needed."** The draft split the
+events by the gate's weight `a_cue` and found its favourite quartile the only non-positive one. That was
+**Simpson's paradox**. `a_cue` is 79 % the softmax *denominator* — `corr(log a_cue, cand_n) = −0.8904`, i.e.
+mostly how many words the sentence has produced — and `|e|` scales as `1/cand_n`, the very mechanical shrink
+§89A quarantines across rungs and then failed to apply to a split on that same denominator. **Hold `cand_n`
+fixed and the ordering reverses** (Q4 − Q1 = +0.1372 / +0.1433 / +0.0990 / +0.0742 / +0.0605 across the five
+strata with n ≥ 400). On the instrument's own within-event control the ordering is monotone **in the gate's
+favour** (Q1 +0.0611 → Q4 +0.2185), and the only *learned* part of the gate, `u`, predicts **better** evidence
+in 13 of 13 `g × cand_n` cells. The redundancy story goes with it: at fixed mixture size, nearer cues carry
+*more* evidence, not less. **The shipped gate selects well; what limited it was how few it was allowed to
+serve.**
 
-So the entire effect is selection: the same memory, read differently. On this fixed set the **served gain in
-bits also turns positive** (−0.00462 → +0.00153), which the all-events figure hides.
+**No conflict with §84.** That section's "2 candidate slots beat 16" is the engine's `nselslots` — the
+candidate LRU depth — not `SEL_TOPM`, and the engine's own top-M is inactive at its shipped default
+(`min(4, 2) = 2`), i.e. the engine already serves 100 % of its candidates.
 
-The clean test of *why* is within one run:
-
-**At `WSELTOPM = 32` every resident cue is served, so the gate no longer decides who is read — but its weight
-is still recorded.** Splitting the identical 26,204 events by the gate's own preference:
-
-| quartile of the gate's weight `a_cue` | n | mean *e* (95 % CI) | `LA` | mean distance *g* |
-|---|---|---|---|---|
-| Q1 — gate likes least | 6,552 | +0.0384 [+0.0305, +0.0462] | 5.716 | 14.22 |
-| Q2 | 6,551 | +0.0599 [+0.0453, +0.0724] | 5.674 | 8.67 |
-| Q3 | 6,551 | **+0.0892 [+0.0698, +0.1049]** | 5.562 | 6.32 |
-| Q4 — gate likes most | 6,550 | **−0.0238 [−0.0998, +0.0437]** | 5.313 | 3.88 |
-
-**The quartile the gate most wants to serve is the only one whose evidence is not positive**, and the
-`SEL_TOPM = 4` set is drawn from exactly that quartile. Q4 − Q1 = −0.0622 logits. The cause is visible in the
-last two columns: the gate's score is `SEL_UGAIN·u − SEL_PBD·k`, so it is dominated by recency (Q4's mean
-distance is 3.9 words, Q1's 14.2), and a cue three words back is one whose outcome the order models already
-have. Q4's cells are individually the *most accurate* (`LA` 5.313, the best of the four) and the *least
-useful*, because they are redundant. **The gate optimises cell accuracy and recency; what the mixture needs is
-marginal information.** That is a different objective, and it is the first cause-level statement §87's
-instrument has produced about the selector rather than the memory.
-
-**What §89A does not settle.** The served gain in bits is still ≈ 0 at fact events (−0.00003 at
-`WSELTOPM = 32`): the readout — §87's third limit, one shared `vsw` per (previous byte, phase, prefix) — still
-converts none of this into bits *at fact outcomes*, even though the stream's aggregate improves. Under §89A's
-registered branches, N1+N2 passing means the gate was the binding constraint and is now relieved; the next
-section is therefore the readout, and §86.3's finding that the bucketed fix is the worst arm on real text says
-it must be per-word or per-cell, not a re-bucketing.
+**What §89A does not claim.** The served gain in bits at fact outcomes is still ≈ 0 (−0.00003 over all events
+at `WSELTOPM = 32`, and significantly negative at some arms): §87's third limit, the single shared `vsw` per
+(previous byte, phase, prefix), is untouched by everything in §89 and is the next lever. §86.3 found the
+bucketed fix the worst arm on real text, so it must be per-word or per-cell.
 
 **Naming note.** `wstate.py`'s v12 docstring and the scratch outputs `_87_scale.txt` / `_88_lockout.txt` use
 "§87" and "§88" for the previous session's scale and lockout probes, whose results are recorded in ledger
