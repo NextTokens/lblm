@@ -3762,7 +3762,7 @@ labelled: `selorc4`'s gate uses position-only logits, so its forced cue carries 
 gate weight vs `sel`'s 0.17–0.28 — the control reproduces the §78B dilution **by
 construction** (it tested dilution, not the readout) and its failure *confirms* that weight
 concentration, not mere inclusion, is what pays. **First learned selector in the project's
-history that binds distant content** — after softmax attention (§77.4), cosine attention, and
+history that binds distant content** (§85.1: C3 was a mis-specified control, and the continuation was taken under an unregistered branch) — after softmax attention (§77.4), cosine attention, and
 two responsibility gates (§79B) all failed.
 
 **Corpus (pre-registered B1–B3 in `wstate.py` before any corpus run; WNS=1 everywhere per the
@@ -3930,6 +3930,98 @@ predicted the N-controls before they ran. Full-enwik8 headline with the correcte
 0.196841 (`BLWNS`) → 0.196123 (`+BLPVEC`) → 0.196021 (`+BLSEL` N16, §83) → **0.195780
 (`N=2` + b23, §84)**; −1.7 % total from the forgetting-and-vote arc, every step online and
 adopted only after beating the previous default on held-out data.
+
+---
+
+## 85. Verification of §81–§84, and the few-shot online-binding probe (`_fewshot_probe.py`)
+
+Two steps, both run by independent agents with their own scripts (scratch: `rt85/`, `fs85/`, `fs85rt/`);
+every number below was recomputed from the raw records by a second agent.
+
+### 85.1 §81–§84 verified
+
+- **Decodability and causality of the adopted selector (`BLSEL=1`, N=2, tables 2^23).** A copy of the
+  current `strong.rs` with a real 32-bit arithmetic coder encodes and decodes all of `corpus_big` back to
+  identical bytes: default 2,376,016 bytes, `BLSEL=0` 2,380,617 bytes — **the channel saves 4,601 real
+  bytes (0.19 %)**, against 4,594 predicted from the model cost. Probability dumps under two byte flips
+  (letter→space inside a word; space→letter merging two words) are bit-identical through the flipped bit
+  and first differ at the very next bit. Code audit found no read of the current byte before it is coded.
+- **`BLSEL=0` recovers the pre-§82 engine**, verified against a rebuild of commit `8b23201`'s source
+  (0.231368 / 0.208290 at 300 KB, identical), not only against the documented number.
+- **Cost:** +192 MB peak working set (exactly the two 2^23 f64 tables) and +5 % wall time (paired runs).
+- **The instrument depth control §84 never ran** (lean selector, `WNS=1`, word mode, same rail as §81):
+
+| slots | wt103 450 / 1200 / 2700 KB | stdlib 400 / 1200 / 2400 KB |
+|---|---|---|
+| 1 | 2.1552 / 2.2197 / 2.3056 | 2.0691 / 2.0999 / 2.1367 |
+| 2 | 2.1522 / 2.2142 / 2.2955 | 2.0621 / 2.0937 / 2.1288 |
+| 4 | 2.1483 / 2.2068 / 2.2876 | 2.0611 / 2.0886 / 2.1221 |
+| 32 (§81) | 2.1445 / 2.2020 / 2.2822 | 2.0593 / 2.0822 / 2.1171 |
+| rail (no selector) | 2.1444 / 2.2046 / 2.2861 | 2.0536 / 2.0830 / 2.1212 |
+
+  In the instrument, depth helps at every step and only depth 32 crosses the rail. §81's real-corpus binding
+  claim stands at instrument scale; §84's revision is correct for the engine, whose word models and match
+  model already cover the deep part. Both hold at their own scale.
+- **§81 probe verdict audit.** All gains, C1–C3 and the 200/200 cue-in-vote-set figures recompute exactly.
+  The registered verdict tree had three branches and none matched the realised outcome (C1, C2a, C2b pass;
+  C3 fail); the code's catch-all printed "KILL (C2 first clause failed)" on a false premise. The override's
+  mechanism claim is verified (`selorc4`'s gate weight on the forced cue equals the position-only softmax to
+  four decimals, 0.045–0.076, so it tested §78B's dilution, not the readout). Correction to §81's wording:
+  C3 was a **mis-specified control, uninformative about the readout**, not a control that "failed as
+  designed"; the continuation was taken under an unregistered branch. The binding claim rests on C2a/C2b,
+  which are independent of C3.
+
+### 85.2 Few-shot online binding (pre-registered in `_fewshot_probe.py` before any run; run on the §81 instrument snapshot, sha `4f0b9ec6…`)
+
+Question: after a never-seen cue word first appears bound to a never-seen outcome word, how many
+exposures does the §81 selector need to use it, learning online in one pass? Training as §81 (8 known
+cues, 1200 sentences); test stream of 320 sentences from 16 cues (8 known + 8 new, each new cue ~20
+times), scored online; exposure index k = the cue's earlier occurrences in the test stream. Output
+`_85_fewshot.txt`, records `fs85/`.
+
+| gap | new-cue gain, mean over k = 5…19 (seeds 7 / 8) | exposures-to-bind (≥ 1.5 bits sustained) | known-cue gain in this stream vs §81 |
+|---|---|---|---|
+| 24 words | +0.70 / −0.77 | none | +0.51 / +0.41 vs +1.68 / +1.60 |
+| 12 words | (secondary) | 10 / 11 | +1.1…+1.3 vs +2.04 / +2.01 |
+
+**Registered verdict at G=24: F1 FAIL, F2 FAIL, F3 FAIL.** The red-team recomputed every figure and then
+established what each failure means:
+
+- **Storage is immediate.** The new cue's own vote cell predicts the outcome's first byte at 8.0 bits on
+  first sight, 1.8 bits after one exposure and 0.16 bits from ten exposures on. The binding is in memory
+  from exposure 1.
+- **Selection is slow.** The gate gives a new cue about half a known cue's share of the vote (weight 0.071
+  vs 0.171; mixture share 0.22 vs 0.48) and does not catch up within 20 exposures at 24 words. F2's
+  registered threshold (gate ≥ 0.3) was mis-calibrated: fully bound §81 cues sit at 0.17.
+- **The early "gains" are hedging, not binding.** At k = 0–2 the whole-word gain is +6.6 bits on the first
+  byte (the baseline pays for a never-seen letter; sel's orders are less confident) and −4.4 bits on the
+  rest of the word (sel spells new words worse at every k). Decomposed by a counterfactual with the vote
+  removed, 40–85 % of the per-k first-byte gain is that hedging.
+- **F3's interference is real and its channel is the shared readout.** A control with the known 8 cues only
+  and the same 320-sentence length restores +1.70 / +1.64 (F3 would pass), so the drop is caused by the new
+  cues' presence. In the 16-cue stream the known cues' gate weight (0.171), vote-set membership (164/164),
+  own-cell accuracy (0.014 bits) and vote mixture (1.34 vs 1.26 bits) are all unchanged; what fell is the
+  **context-selected readout weight** shared by every word at the deciding bits (phase 5: 0.06 vs 0.84).
+  New-cue sentences produce confidently wrong votes (4.9 bits), the shared RMSProp weight is driven down,
+  and re-reading the 16-cue stream's votes through the control's weights recovers 88 % of the 1.22-bit loss.
+
+**Plain-language statement.** The machine writes a new fact into memory the first time it sees it, and
+that memory is accurate within a few exposures. What it cannot yet do is trust the new fact quickly, and
+its one shared "how much to trust memory" dial per bit position means unreliable new memories turn the
+dial down for the reliable old ones too: adding eight unknown pairs cut the known pairs' benefit from 1.7
+to 0.5 bits. Storage works; selection is slow; **the shared readout is the interference channel.**
+
+### 85.3 What this fixes in the record, and the next lever
+
+- §81's wording on C3 is corrected above; §81's binding claim and §84's engine revision both stand.
+- The lever the probe points to is structural and cheap: **per-word or per-reliability readout
+  weighting** instead of one dial shared by every word at a context (e.g. the readout weight keyed by the
+  selected word's own usefulness bucket, or a reliability-gated vote). It is the first cause since §81 that
+  the depth story does not explain, and it is pre-registerable on this probe: the known-cue gain in the
+  16-cue stream must return to within 0.3 bits of the 8-cue control, and exposures-to-bind at 24 words
+  must become finite.
+- Registration lessons: calibrate thresholds against the instrument's own known-good values before
+  registering (F2), and never use whole-word gain on never-seen words as a binding measure (F1).
 
 ---
 
