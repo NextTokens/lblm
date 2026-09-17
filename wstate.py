@@ -285,6 +285,20 @@ vote set, counts, vector credit and every other part are selrbfa's, unchanged), 
   False), and sel_bpos/sel_expn/sel_expb are counters nothing outside SEL_EXP_ARMS reads.
   §88 registration, cells and criteria D1-D3: _lockout_probe.py.
 
+v13 (§87, THE FACT-LEVEL INSTRUMENT FOR REAL TEXT): no new arm. Three additions, each default-preserving,
+all verified bit-identical (selleanu on 60 KB/25 KB: 2.372273 / 2.525331 with and without them):
+    sel_dnv    : DIAGNOSTIC ONLY (written only while self.sel_diag is on, like §86's sel_pnv): the mixer dot
+                 BEFORE squash, i.e. the served prediction with the vote term removed, in logits. §87's
+                 counterfactual re-adds its own vote term to this number instead of round-tripping
+                 squash -> stretch, which was worth ~2.5e-6 bits/bit and made the self-test S2 fail.
+    WSELTOPM   : env knob for SEL_TOPM, default "4" = the §81 literal. The vote set is the top-SEL_TOPM
+                 candidates by gate weight; §87 measures ~12 residents at a word start, so this is the knob
+                 that decides how much of what the machine HOLDS it is allowed to USE.
+    WSELPBD    : env knob for SEL_PBD, default "0.05" = the §81 literal. The recency prior in the gate
+                 score SEL_UGAIN*u - SEL_PBD*k; an untrained cue loses to recency by 0.05 per slot step.
+  §89's registered selection intervention is a ladder over these two knobs; §87's registration, the fact
+  definition, the three estimands and the self-tests are in _factprobe.py.
+
 Words: maximal [A-Za-z0-9] runs, lowercased, FNV-1a rolling hash -> id (prefix-visible, like
 the core's word model). id 0 (no active word) -> zero embedding. The EMA of word embeddings is
 a running TOPIC vector -- long-range structure no order-n byte table represents.
@@ -404,11 +418,13 @@ SEL_LEAN_ARMS = ("sellean", "selleanu", "selleanrb", "selleanfa", "selleanrbfa")
 #   selrbfaexp : selrbfa + forced exploration of one candidate outside the vote set (SELEXP_P)      [§88]
 #   selrbfaug  : selrbfa + the usefulness update's wu gate lowered to SELUG_T (ungated trust)       [§88]
 #   selrbfaoe  : selrbfaopt + selrbfaexp                                                            [§88]
-SEL_PBD = 0.05      # position bias per slot step (recency prior; small enough that learned usefulness outranks ~12 slots of recency)
+SEL_PBD = float(os.environ.get("WSELPBD", "0.05"))   # §87: env knob, default = the §81 literal
+                    # position bias per slot step (recency prior; small enough that learned usefulness outranks ~12 slots of recency)
 SEL_TSC = 2.0       # softmax temperature (properly scaled scores; e is O(4) so a stays graded)
 SEL_UDC = 0.995     # usefulness EWMA decay (timescale ~200 bytes)
 SEL_UCLIP = 4.0     # usefulness clamp
-SEL_TOPM = 4        # vote-set size (matches WTOPM=4 of the §77 arms)
+SEL_TOPM = int(os.environ.get("WSELTOPM", "4"))       # §87: env knob, default = the §81 literal
+                    # vote-set size (matches WTOPM=4 of the §77 arms)
 SVBITS = int(os.environ.get("WVBITS2", "22"))      # §81 vote-table bits (flat, bounded; real corpora)
 WNS = os.environ.get("WNS", "0") == "1"            # §81 corpus phase: PAQ nonstationary rule on the
                                                    # order tables (§78.2: cumulative counters are a weak rail)
@@ -640,6 +656,7 @@ class Model:
             self.sel_wk = 0                          # §86: the readout dict key used at the last served bit
             self.sun = {}                            # §86 selfa: usefulness update counts per (gk, word)
             self.sel_pnv = None                      # §86 diagnostic (see self.sel_diag): counterfactual p
+            self.sel_dnv = 0.0                       # §87 diagnostic: the pre-squash mixer dot without the vote
                                                      #     with the vsw*f term removed
             self.sel_vc_bit = 0.0                    # ... the last bit's contribution (bits saved by the vote)
             self.sel_vc_acc = 0.0                    # ... running sum over the byte being served
@@ -878,6 +895,9 @@ class Model:
             self.sel_wk = wk
             if self.sel_diag:
                 self.sel_pnv = squash(d)          # §86 diagnostic: the SAME model with the vote term removed
+                self.sel_dnv = d                  # §87 diagnostic: that same dot BEFORE squash, so a
+                                                  # counterfactual can re-add its own vote term without a
+                                                  # squash->stretch round trip (worth ~2.5e-6 bits/bit)
             d += self.vsw.get(wk, 0.0) * f
         return squash(d), sts
 

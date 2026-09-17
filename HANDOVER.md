@@ -1,4 +1,49 @@
-# HANDOVER — the LBLM intelligence track, post-§86
+# HANDOVER — the LBLM intelligence track, post-§87
+
+> **§87 update (2026-09-17) — the fact-level instrument for real text. Read ledger §87 first.**
+>
+> **Why it exists.** §86.8 proved corpus bits/byte can *reward* the very defect that destroys a specific
+> memory, so every binding claim about real text so far (§81's corpus crossings, §86.3's arm ranking) rested
+> on a measure that cannot see this track's question. §87 is the missing measure: for a pair of words that
+> genuinely go together — `steiner → hitler`, `miles → km`, `superfamily → family` — it asks what the machine's
+> memory *of the cue* was worth at the moment the outcome was coded, one fact at a time.
+>
+> **The headline, on the load-bearing population** (1,661 fact events served at every rung with a served
+> frequency-matched partner — a within-event, same-byte, same-bits contrast no selection imbalance can enter):
+> at the **shipped** table size a word's own memory of its fact is significantly *worse* than the memory of a
+> word standing beside it by coincidence (`LA − LM` = **+0.290 bits [+0.046, +0.535]**). De-collide the table
+> and that reverses (**−0.121** at 2^28), a fact-specific repair of **−0.4106 bits [−0.7284, −0.1570]** (paired
+> DiD; **+0.4514 logits [+0.2478, +0.6871]** on cue evidence). **And bits/byte gets monotonically WORSE at
+> every step** (2.278784 → 2.284920, ρ = +1.000). Replicated on an independent 890 KB stream.
+>
+> **The machine still does not recall facts on real text.** At every rung the served evidence is negative
+> (−0.64 → −0.25). The cue is in the slot LRU on 100 % of events, in the served vote set on 21 %, and beyond
+> nine words on 0.15 %. The shared readout converts 2 bits of content into +0.0006 bits.
+>
+> **Two structural facts, from the code and a model-free replay:** the memory is **sentence-scoped** (a `.`
+> wipes the whole slot LRU — 2,220 of 11,751 events are structural zeros), and it is **saturated**:
+> 104,860,139 distinct vote keys over 301 M cell reads against 4,194,304 cells — 100 % collided, ~25 keys per
+> cell (99.8 / 79.0 / 32.3 % at 2^24/26/28).
+>
+> **Both red-teams changed the result.** The first (pre-run) showed §86's cue-attributable gain is
+> sign-inverted on real text and forced a readout-free estimand. The second (pre-write-up) withdrew three
+> headline sentences of the first draft: the unconditional mean factorises as `P(served) × E[e|served]` and its
+> sign was set by the service rate, not by memory content. Two of §87's own controls are defective and are
+> reported as such (C-NULL is 70 % facts; C-ELSEWHERE's pooled sign comes from its `j+1` half).
+>
+> **Registered verdicts:** R4 **PASS** (thin on its registered 17-row stratum; carried by the 1,900-event
+> served-conditional population and the paired DiD). R1 **FAIL** and uninformative in both directions. R2
+> **indeterminate**, and the draft's reading of it withdrawn. R3 0.056 → 0.500 across the ladder.
+>
+> **New:** `_factprobe.py` (registration verbatim in its docstring, extraction, job, self-tests, report, grid);
+> `wstate.py` v13 — `sel_dnv` (diagnostic-only exact pre-squash dot) and the `WSELTOPM` / `WSELPBD` env knobs,
+> all defaulting to the §81 literals and verified bit-identical. **§89 is pre-registered blind** in
+> `scratchpad/p87/prereg_89.md`: §89B ports `BLSELTAG` into the instrument (does tagging at 2^22 buy the 2^28
+> rung for 4 MB instead of 4.29 GB?), then §89A ladders the two selection knobs.
+
+---
+
+# Previous state (post-§86)
 
 > **§86 update (2026-09-17) — an 8-hour session on the intelligence path. Read ledger §86 first.**
 >

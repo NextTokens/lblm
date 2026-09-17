@@ -4220,6 +4220,11 @@ OFF; adoption is the owner's decision under the §80 precedent, in its own revie
   §86.8 shows corpus bits/byte can reward the very defect that destroys a specific memory, so binding claims on
   real data need a recall measure, not a compression measure; (4) the §85 lesson, now twice-learned: a metric
   over a whole channel does not measure the part of the channel under test.
+  **[§87 ANSWERED (1) and (3), and made (4) a five-times-learned lesson.** The fact-level instrument exists
+  (`_factprobe.py`); the collision finding is replicated on real text as a registered forward prediction at four
+  doses; and corpus bits/byte does not merely fail to see binding, it moves in the *opposite* direction to
+  fact-level memory quality. (2) remains open, and §87 adds a negative note: the real-text version of the
+  inverted readout was tested (`negoracle.py`) and is not supported.]**
 - **Answered this session:** a better-addressed instrument table does NOT improve the corpus verdict (§86.8).
 
 ### 86.8 Collisions destroy specific memories while helping aggregate compression
@@ -4248,6 +4253,227 @@ track is about: the same defect that destroys a machine's ability to recall a pa
 bits-per-byte. Reliable recall of specific facts and aggregate compression are not the same objective, and where
 they conflict this section is the evidence. Probe-style, fact-level measurement is the right instrument for
 binding claims; corpus bits/byte is the right instrument for production claims; neither substitutes for the other.
+
+---
+
+## 87. A fact-level recall instrument for real corpus text (`_factprobe.py`, `wstate.py` v13)
+
+§86.7's highest-value open item was that **corpus bits/byte cannot answer the binding question**: §86.8 showed
+the same collision defect that destroys a specific memory on the synthetic probe can *improve* aggregate
+compression, so §81's corpus crossings and §86.3's arm ranking rest on a measure that does not see what this
+track is about. §87 builds the missing instrument — recall of *specific facts*, measured on natural text — and
+uses it to turn §86.8's post-hoc reconciliation into a forward, falsifiable prediction.
+
+Everything below was registered before it was run, attacked by an independent four-lens red-team before the
+grid (which rewrote the metric), and attacked again by a second four-lens red-team before it was written here
+(which withdrew three of the first draft's headline sentences). Both attacks are recorded in §87.6.
+
+### 87.1 What a "fact" is on real text, and what the machine can structurally hold
+
+A **fact** is a word-type pair (A,B) with count(A), count(B) ≥ 5, at least 4 within-sentence occurrences of B
+whose **nearest** preceding A lies 2–24 words back, and window-lift ≥ 4 — lift measured against the chance of a
+B landing anywhere in a 23-word window, `1 − (1 − count(B)/n)^23`, not against a per-word probability. On
+`wt103_test[:400 KB]` (66,274 words, 21 documents) that yields the associations a reader would name:
+`miles → km`, `steiner → hitler`, `superfamily → family`, `naktong → division`, `winds → km/h`,
+`kershaw → season`. The same rule on `stdlib_test` yields `src → dst`, `handle → request`, `alert → description`.
+
+Three properties of the instrument bound what can be measured. Two were found by reading the code; the third
+by replaying the slot rule over the stream without a model:
+
+1. **The machine's memory is sentence-scoped.** For every `SEL_ARM`, `_byte_end` executes
+   `if b == 46: self.slots = [0] * S` — a `.` wipes the entire slot LRU, so a cue separated from its outcome by
+   a sentence end cannot be a candidate and contributes exactly 0 by construction. That is **2,220 of 11,751**
+   extracted events. (One carve-out is real and flagged: the wipe happens *before* the LRU insert of the word
+   that just completed, so the last word of a sentence survives into slot 0.)
+2. **The memory is saturated at the adopted table size.** A model-free replay of the instrument's own slot rule
+   and key expression over train+measure (`keycount.py`) gives **301,246,416 cell reads** over an estimated
+   **104,860,139 distinct `(word, 3-byte context, phase, prefix)` keys** (a 2^32 bitset with the standard
+   collision correction). Against `WVBITS2 = 22`'s 4,194,304 cells that implies a **100 % collision rate and
+   ~25 distinct keys per cell**; the ladder is 99.8 % / 79.0 % / 32.3 % at 2^24 / 2^26 / 2^28.
+3. **Only 4 of ~16.6 residents are ever served.** `SEL_TOPM = 4` truncates the candidate set and the gate score
+   is `SEL_UGAIN·u − SEL_PBD·k`, so an untrained cue loses to recency by 0.05 per slot step.
+
+### 87.2 The measurement
+
+At every bit of an instrumented outcome word the job calls `predict()` once — pure; self-test S1 confirms the
+per-byte cost stream is bit-identical to a plain `run()` — and forms three quantities from the served state:
+
+| | what it is | what it measures |
+|---|---|---|
+| **served gain** | cost(cue removed from the served set T, weights renormalised) − cost as served | §86's cue-attributable metric. A verdict about the **readout**, not the memory (below). |
+| **cue evidence** *e* | Σ over the byte's bits of (f − f_without_cue)·(+1 if y==1 else −1), in logits | what the cue's own cell pushed toward the bit that actually occurred, free of the readout weight |
+| **cell cost** `LA` | −Σ log2 p1_cue over the outcome's identity byte | what B's identity byte would cost coded from the cue's own cell alone |
+
+**Why the served gain is not a memory measure** — the finding that forced the instrument to be rebuilt before
+it ran. Its sign is `sign(vsw) × (the cue's own direction)`, and for `selleanu` `vsw` is ONE shared RMSProp
+scalar per `(previous byte, phase, prefix)` — the same key for 98.6 % of fact events — measured negative on
+73.2 % of scored bits. The registered statistic is therefore **maximised by the absence of binding**: −0.0226
+bits for cues whose cell really holds B, +0.0372 for cues whose cell is wrong about it. That is §85's F1 and
+§86.2's metric error a third time, caught before the run rather than after it.
+
+**Controls** (all on the identical counterfactual): **C-MATCH**, the *served* candidate whose stream frequency
+is nearest the cue's, so both arms are served and the comparison is about which memory; **C-ELSEWHERE**, the
+same cue at neighbouring word starts that are not B; **C-NULL**, a band-relative pair with the same outcome;
+**CROSS**, the structural zeros of 87.1(1). Primary population: facts that qualify on the stream's first half,
+scored on its second; primary stratum adds fan-out ≤ 2 and B absent from the preceding 25 words. Bootstrap:
+two-level cluster over documents then fact types. Self-tests S1–S4 all pass (S3 after the fix in §87.5).
+
+### 87.3 The result: what de-collision does to the memory, and what it does to compression
+
+Six runs on the 400 KB stream (`selleanu` at `WVBITS2 ∈ {22, 24, 26, 28}`, `selleanfa`, `baseline`) plus a
+replication on an 890 KB stream. **The load-bearing population is the 1,661 fact events that are served at
+every rung and have a served C-MATCH partner** — a within-event, within-byte, service-matched contrast into
+which no selection imbalance can enter (the first draft's population could not say that; see §87.5).
+
+| table | collisions | `LA` fact cell | `LM` matched partner | **`LA − LM`** (95 % CI) | *e* fact | **bits/byte** |
+|---|---|---|---|---|---|---|
+| 2^22 (adopted) | 100.0 % | 7.176 | 6.886 | **+0.290 [+0.046, +0.535]** | −0.6444 | **2.278784** |
+| 2^24 | 99.8 % | 6.678 | 6.557 | +0.122 [−0.199, +0.432] | −0.5969 | 2.281810 |
+| 2^26 | 79.0 % | 6.079 | 5.986 | +0.092 [−0.236, +0.427] | −0.4431 | 2.284270 |
+| 2^28 | 32.3 % | **5.189** | 5.310 | **−0.121 [−0.421, +0.130]** | **−0.2503** | **2.284920** |
+
+**Three statements, each with its own interval.**
+
+1. **At the shipped table size a word's memory of its own fact is significantly *worse* than a coincidence.**
+   `LA − LM = +0.290 bits [+0.046, +0.535]`: the cue's own cell predicts the outcome's identity byte worse
+   than the cell of a frequency-matched word that merely happens to be in the same vote set at the same
+   instant. On cue evidence the same comparison is −0.6444 against −0.0108 — the fact's cue actively pushes
+   away from its own outcome while the coincidental word is neutral.
+2. **De-collision repairs that, and the repair is fact-specific.** Paired difference-in-differences over the
+   same 1,661 events: **−0.4106 bits [−0.7284, −0.1570]** on `LA − LM`, and **+0.4514 logits
+   [+0.2478, +0.6871]** on cue evidence against C-MATCH. Both exclude zero. So of the ~2 bits of cell
+   sharpening de-collision buys (`LA` 7.176 → 5.189), about 0.41 bits is specific to the fact's own cell; the
+   rest is generic — every cell gets sharper (`LM` 6.886 → 5.310).
+3. **Every step of that repair makes compression monotonically worse.** bits/byte 2.278784 → 2.284920,
+   Spearman(−collision rate, bits/byte) = **+1.000**, against Spearman(−collision rate, cue evidence) =
+   **+1.000** on the served-conditional population (−0.6604 / −0.6269 / −0.4624 / −0.2566, n ≈ 1,900 per rung).
+
+The 2^22 figure 2.278784 reproduces §86.8's independently measured wt103 2700 KB value of 2.2788 exactly, and
+the `baseline` rail (2.286090) reproduces §85.1's 2.2861 to five decimals.
+
+**This is what §87 was built to get.** §86.8 inferred the memory/compression divergence after the fact from two
+disagreeing numbers. §87 registered it, with a branch for every outcome, and measured it at four doses inside
+one run on the same bytes: **the machine's memory of specific facts and its compression score move in opposite
+directions, monotonically.**
+
+**The obvious confound, run and refuted in the opposite direction** (`shrink.py`, confirmed independently by
+the red-team's `rt87b/shrinklens/`). A bigger table spreads the same 301 M updates over more cells (counts per
+cell fall 109 → 66), so every logit-scale quantity could shrink toward zero mechanically. It does not: the
+cells **sharpen** (mean |p1 − 0.5| rises 0.2533 → 0.4271), the vote feature's own scale more than doubles
+(mean |f| 1.78 → 3.94), and `LA` falls toward the rail where count-starvation would drive it *up* toward 8
+bits. A pure-rescaling model predicts the fact's evidence should become *more* negative at 2^28 (−0.139 to
+−0.171); it is measured at −0.0545.
+
+### 87.4 What the machine still cannot do, and why
+
+**It does not recall facts on real text.** Even at 32 % collisions the cue's served evidence is −0.25 logits:
+consulted, the memory still pushes away from the byte that occurs. Two limits survive de-collision:
+
+* **Selection.** The cue is in the slot LRU on **100.0 %** of events and in the served vote set on **21.3 %**,
+  and beyond nine words on **0.15 %** (5 of 3,337 events at 2^28) — `SEL_TOPM = 4` against 16.6 residents,
+  with a recency prior no untrained cue can outrank. Forcing the cue in costs bits
+  (−0.0087 [−0.0137, −0.0041]), and the cost is the **displaced member, not the cue**: forcing a matched
+  non-fact cue into the same positions costs the same (−0.0098 vs −0.0099, paired difference
+  −0.0001 [−0.0032, +0.0026]). Whether *enlarging* the served set rather than swapping into it pays is
+  therefore untested, and is §89A's question.
+* **Readout.** The served gain — §86's metric, the readout's own verdict — is −0.0005 bits over all events and
+  +0.0006 on the clean stratum at 2^28. A 2-bit improvement in cell content converts to nothing, because one
+  shared `vsw` per (previous byte, phase, prefix) prices every word's vote.
+
+**`selleanfa` changes none of it, and the reason is sharper than the headline.** On all 1,391 events both arms
+serve, the cue cell's code length for the outcome byte is **identical to the last bit** (paired difference
+exactly 0.0000): the two arms share the vote cells and differ only in how fast trust moves. Paired cue-evidence
+difference −0.0034 [−0.0167, +0.0133]; and on this stream fast trust is *worse* on bits/byte (2.280100 vs
+2.278784). Trust speed is not the constraint.
+
+**Replication on an independent, larger stream.** The registered power remedy was invoked (the primary stratum
+held 38 events at 400 KB) and the grid re-run on `wt103_test[:890 KB]` — 147,026 words, 40 documents, 4,498
+fact types, 26,204 fact attributions. `LA` (served) 7.261 → 5.102 against a rail of 3.80; the cue's own cell
+beats that rail on 0.127 → 0.303 of events; mean *e* −0.1430 [−0.1724, −0.1190] → −0.0670 [−0.0913, −0.0448];
+bits/byte 2.244060 → 2.250980 against a rail of 2.253037. Direction and magnitude both hold.
+
+### 87.5 The registered verdicts, and the three sentences the red-team withdrew
+
+* **R4 — PASS.** Registered bar ρ ≥ +0.8 for cue evidence against falling collision rate, with bits/byte
+  worsening. Both hold. **Stated with its weakness:** on the *registered* stratum (clean and unmasked) the
+  population is 17 events over 6 fact types of which only three ever score (`either→or`, `more→than`, `3→4`),
+  the ladder is one adjacent inversion short of monotone, and ρ = +0.800 has an exhaustive-permutation
+  p = 0.167. The result is carried by the served-conditional all-facts population (ρ = +1.000, n ≈ 1,900 per
+  rung) and by the paired DiD of §87.3, not by the registered 17 rows.
+* **R1 — FAIL, and its registered statistic is uninformative in both directions.** The estimand was
+  fact − C-MATCH, but C-MATCH is drawn from the served set and is therefore served on 100 % of rows while the
+  fact is served on 19.6 %, with *e* identically 0 when unserved: the raw statistic reads +0.345
+  [+0.208, +0.457] at 2^22, a "pass" produced by 0-vs-negative. Restricted to rows where both are served, the
+  fact is worse (−0.644 vs −0.011) — so R1 fails on the comparable population. Its threshold was also
+  mis-scaled by me: a *per-event* 95th percentile compared against a *mean*.
+* **R2 — INDETERMINATE, and the first draft's reading of it was wrong.** The draft reported "a matched
+  non-fact pair scores better than the fact (−0.101 vs −0.130)" and read it as the machine's memory being
+  worse than useless. **Withdrawn.** `mean e = P(served) × E[e | served]` exactly, and the entire gap is the
+  first term: fact cues are served on 0.196 of events against 0.129 for C-NULL and 0.142 for C-ELSEWHERE,
+  and every conditional mean is negative, so the more-served arm is penalised by construction. Conditional on
+  service the fact is the least negative of the three at every rung. The controlled version of the claim is
+  §87.3's `LA − LM`, which survives.
+* **Two of §87's own controls are defective and must not be used for specificity.** **C-NULL is 70 % facts:**
+  674 of 961 partners (73.0 % of scored rows) are themselves members of the frozen fact set, because the
+  partner had to clear the same ≥ 4-in-sentence-events gate and the "bottom quartile" is not a quartile when
+  the median pool size is 2. **C-ELSEWHERE's pooled sign is an artifact of its `j+1` half:** j−1 gives −0.1505
+  (worse than the fact) and j+1 gives −0.0621 (better), and the adjacency filter drops 1,503 j−1 rows and
+  exactly 0 j+1 rows. Both are reported, neither is used.
+* **R3 — 0.056 / 0.111 / 0.278 / 0.500** across the ladder on the 400 KB primary population, 0.000 → 0.235 on
+  the 890 KB replication (descriptive; no threshold registered, as declared).
+* **R5 — the rail costs 4.12 bits** for a fact's identity byte over all filtered events, 3.70 over served ones.
+* **A4 is weaker than registered.** Only the ≥ 4-events gate is computed on the first half; lift, the count
+  gates and fan-out are still computed over the whole stream. Under strict first-half qualification the split
+  population is 162 events and the direction holds (e(2^28) = +0.128 [−0.270, +0.566]) but significance does not.
+* **S1–S4 pass**, S3 after an event-definition fix the test itself found: 62 of 2,220 "cross-sentence" events
+  had the cue *also* adjacent to the outcome (slot 0, distance 1 — invisible to a window starting at 2), so
+  the record named a distant copy while the attribution went to the adjacent one. All 1,736 such rows are
+  dropped everywhere; afterwards the structural zero is exact (max |gain| 0.000e+00).
+* **Checked and not supported:** that the readout uses the memory *inverted* (a real-text version of §86.2's
+  novelty detector). The quadrant test (`negoracle.py`) does not behave as a sign model predicts, and the
+  served channel is worth ≈ −0.003 bits at fact events either way. Recorded so it is not re-run.
+
+### 87.6 Where this leaves the intelligence path
+
+**In plain words.** Ask the machine what it remembers about a word at the moment its partner arrives —
+*Steiner … Hitler*, *miles … km* — and at the size this project ships, what comes back about that specific
+pair is *worse than what a word standing next to it by coincidence has to say*. Its memory cell for the pair
+is shared with about twenty-five unrelated pairs. Give the pairs room and the machine's memory of its own
+facts improves specifically, by about 0.4 bits more than the coincidence's does. **And every step of that
+improvement makes the compression score worse.** That is the whole reason §87 exists: §86.8 suspected it,
+§87 registered it and measured it at four doses.
+
+**The three limits, now separated and ordered.** §85 named storage / trust / readout; §87 measures the
+corresponding three on real text:
+
+1. **Addressing** — the binding one, and the only one §87 moves. Worth ~2 bits of cell sharpening, of which
+   ~0.4 bits is fact-specific.
+2. **Selection** — the cue reaches the served set on 21 % of events and 0.15 % beyond nine words. Untested
+   whether enlarging the set pays, because the only intervention measured (substitution) costs the same for a
+   fact cue and a non-fact cue.
+3. **Readout** — one shared weight prices every word's vote, converting 2 bits of content into +0.0006.
+   §86.3 already showed the bucketed fix is the worst arm on real text, so this is a per-word or per-cell
+   problem, not a re-bucketing one.
+
+**Next (pre-registered blind in `prereg_89.md`, before any §87 number was read).** §89B: port the engine's
+`BLSELTAG` (8-bit tag, evict on mismatch — §86.6, +0.000374…+0.000935 held out) into the instrument and ask
+whether tagging at 2^22 reaches the 2^28 rung's `LA − LM` **at 4 MB instead of 4.29 GB**. Tagging and
+enlarging are different interventions — enlarging dilutes collisions, tagging evicts them, and §86.5 measured
+eviction beating merging in the engine — so §87's ladder bounds what addressing is worth without saying how
+cheaply it can be bought. §89A (the `WSELTOPM` / `WSELPBD` ladder, knobs added in v13 and verified
+bit-identical) follows it, because selection only binds once addressing is fixed.
+
+**What §87 does not claim.** That the machine recalls facts on real text — it does not, at any rung. That the
+addressing fix is the cheapest one — that is §89B's question. Anything about the engine, whose tag result is a
+separate held-out measurement (§86.6). And it answers §86.7's item (3), the reason §87 was run: corpus
+bits/byte is not merely a poor instrument for binding, it moves in the **opposite direction** to fact-level
+memory quality across four measured doses.
+
+**Method lesson, the fifth of its kind.** §85's F1, §86.2's registered metric, §87's served gain, §87's own
+threshold — and now §87's first draft, which read `P(served) × E[e | served]` as a statement about memory
+content when its sign was set by the service rate. Every one is the same error: **a statistic aggregated over
+a channel does not measure the part of the channel under test.** The estimand that survived is the one that
+holds everything but the thing under test fixed — same event, same byte, same bits, both cells served.
 
 ---
 
