@@ -4386,11 +4386,25 @@ exactly 0.0000): the two arms share the vote cells and differ only in how fast t
 difference −0.0034 [−0.0167, +0.0133]; and on this stream fast trust is *worse* on bits/byte (2.280100 vs
 2.278784). Trust speed is not the constraint.
 
-**Replication on an independent, larger stream.** The registered power remedy was invoked (the primary stratum
-held 38 events at 400 KB) and the grid re-run on `wt103_test[:890 KB]` — 147,026 words, 40 documents, 4,498
-fact types, 26,204 fact attributions. `LA` (served) 7.261 → 5.102 against a rail of 3.80; the cue's own cell
-beats that rail on 0.127 → 0.303 of events; mean *e* −0.1430 [−0.1724, −0.1190] → −0.0670 [−0.0913, −0.0448];
-bits/byte 2.244060 → 2.250980 against a rail of 2.253037. Direction and magnitude both hold.
+**Replication on an independent, larger stream — and it is stronger there.** The registered power remedy was
+invoked (the primary stratum held 38 events at 400 KB) and the whole ladder re-run on `wt103_test[:890 KB]` —
+147,026 words, 40 documents, 4,498 fact types, 26,204 fact attributions, and **4,254 events in the paired
+service-matched population** against 1,661 on the 400 KB stream:
+
+| table | `LA` fact | `LM` matched partner | **`LA − LM`** (95 % CI) | *e* fact | *e* match | bits/byte |
+|---|---|---|---|---|---|---|
+| 2^22 | 7.309 | 6.925 | **+0.384 [+0.233, +0.540]** | −0.7779 | −0.0436 | **2.244060** |
+| 2^24 | 6.832 | 6.526 | +0.306 [+0.111, +0.502] | −0.7778 | −0.0944 | 2.247285 |
+| 2^26 | 6.078 | 6.023 | +0.055 [−0.137, +0.254] | −0.5747 | −0.1638 | 2.250053 |
+| 2^28 | 5.177 | 5.414 | **−0.237 [−0.396, −0.073]** | −0.3449 | −0.1600 | 2.250980 |
+
+On this stream **both endpoints exclude zero**, so the sign change is significant at both ends rather than at
+one: at the shipped size the fact's own cell is worse than the coincidence's by +0.384 bits, and at 2^28 it is
+better by 0.237. Paired DiD **−0.6211 bits [−0.8095, −0.4305]**; on cue evidence against C-MATCH
+**+0.5494 logits [+0.3860, +0.7646]**. The bits/byte column is monotone worse across all four rungs here too
+(ρ = +1.000), against a rail of 2.253037 — note the adopted 2^22 selector beats that rail by 0.0090 while the
+2^28 one beats it by only 0.0021, i.e. **de-collision gives back three-quarters of the channel's entire
+compression value** while repairing the memory.
 
 ### 87.5 The registered verdicts, and the three sentences the red-team withdrew
 

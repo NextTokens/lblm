@@ -14,7 +14,13 @@
 > word standing beside it by coincidence (`LA − LM` = **+0.290 bits [+0.046, +0.535]**). De-collide the table
 > and that reverses (**−0.121** at 2^28), a fact-specific repair of **−0.4106 bits [−0.7284, −0.1570]** (paired
 > DiD; **+0.4514 logits [+0.2478, +0.6871]** on cue evidence). **And bits/byte gets monotonically WORSE at
-> every step** (2.278784 → 2.284920, ρ = +1.000). Replicated on an independent 890 KB stream.
+> every step** (2.278784 → 2.284920, ρ = +1.000).
+>
+> **The independent 890 KB replication is stronger** (4,254 paired events): `LA − LM` runs
+> **+0.384 [+0.233, +0.540] → −0.237 [−0.396, −0.073]**, so *both* endpoints exclude zero and the sign change
+> is significant at both ends; paired DiD **−0.6211 bits [−0.8095, −0.4305]**. bits/byte is monotone worse
+> there too (2.244060 → 2.250980 against a rail of 2.253037) — de-collision hands back three-quarters of the
+> whole channel's compression value while repairing the memory.
 >
 > **The machine still does not recall facts on real text.** At every rung the served evidence is negative
 > (−0.64 → −0.25). The cue is in the slot LRU on 100 % of events, in the served vote set on 21 %, and beyond
