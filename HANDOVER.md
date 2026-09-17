@@ -1,29 +1,28 @@
 # HANDOVER — the LBLM intelligence track, post-§89
 
-> **§89 update (2026-09-17) — the cheap fix. Read ledger §89, then §87.**
+> **§89 update (2026-09-17) — the cheap fix, and a mechanism claim I got wrong. Read ledger §89, then §87.**
 >
-> **The machine's memory was never too small; it was too shared.** An 8-bit tag per vote cell with
-> evict-on-mismatch (`WSELTAG=1`, v14, default OFF and bit-identical when off) costs **4 MB on a 67 MB table**
-> and recovers **as much** of the machine's memory of its own facts as a **4.29 GB** table does (the paired
-> difference between them, −0.0730 [−0.2175, +0.0766], includes zero — an earlier draft claimed it was more). On §87's
-> estimand (paired `LA − LM`, 4,079 service-matched events, 890 KB stream): adopted 2^22
-> **+0.412 [+0.256, +0.567]** → 2^28 −0.231 [−0.396, −0.062] → **tagged 2^22 −0.304 [−0.450, −0.144]**.
-> Change from adopted: −0.6425 for 4.29 GB versus −0.7155 for 4 MB — statistically indistinguishable,
-> at **1/60 of the memory**. Both streams agree.
+> **What holds.** An 8-bit tag per vote cell with evict-on-mismatch (`WSELTAG=1`, v14, default OFF and
+> bit-identical when off) costs **4 MB on a 67 MB table** and reaches the fact-level memory of a **4.29 GB**
+> table — **parity at 1/60 of the memory**, past its registered bar on both streams. On §87's estimand
+> (paired `LA − LM`, 4,079 events): adopted 2^22 **+0.412** → 2^28 −0.231 → **tagged 2^22 −0.315**. The
+> paired tagged-minus-2^28 difference is −0.0730 [−0.2175, +0.0766] — a **tie**, not a win; an earlier draft
+> claimed it beat 2^28 and that is withdrawn.
 >
-> **And it costs compression, as registered.** Tagging makes bits/byte worse on both streams — §86.8's
-> data-per-cell account covers eviction as well as dilution. At 2^24 with tags the channel's whole value is
-> gone (2.253886 against a rail of 2.253037): **the memory is best exactly where the compressor is worse than
-> having no memory channel at all.**
+> **What I got wrong.** I read the gain as *purity* — one key's estimate instead of a blend of twenty-five.
+> A red-team ablation refuted it: with **no tags at all**, cells wiped at random at a matched rate and reads
+> refused at random at a matched rate — **zero identity information anywhere** — `LA − LM` reaches
+> **99.3 % of the same travel**, with cells holding a median of **one count**. It is **shallowness**, not
+> ownership, that moves the number. "Sharing, not scarcity, was the defect" is withdrawn.
 >
-> **Mechanism (T3):** 206 M cell takeovers in one pass, 26.7 % of served reads landing on another key's cell.
-> At 100 % collision a tag cannot create capacity — it decides *ownership*. The gain is a cell being one key's
-> estimate instead of a blend of twenty-five; the cost is that the owner changes constantly, destroying the
-> smoothing that was buying the compression.
+> **Cost.** Tagging worsens bits/byte on both measured streams and on the calibration slice, but *improves*
+> it on the 2.7 MB train slice of the same run (−0.002141), so §86.8's regime account is **left open**, not
+> confirmed. And the claim that the engine "can have both" is withdrawn as unlicensed: §86.6 measured the
+> engine's tag in bits/bit, and §87's whole point is that bits/bit cannot answer the memory question.
 >
-> **This strengthens the engine's pending decision.** §86.6 measured `BLSELTAG=1` *improving* the engine's
-> bits/byte while the same mechanism worsens the instrument's — not a contradiction but §86.8's regimes.
-> **The engine can have both; the instrument must choose.**
+> **Still true after all of it:** the machine does not recall facts. Cue evidence −0.2832; the served gain is
+> significantly negative (−0.00462 [−0.00897, −0.00038]); the repaired cell still codes the fact's identity
+> byte at 5.105 bits against the plain rail's 3.746.
 >
 > **§89A ran, and it is the session's most consequential result.** Laddering `WSELTOPM` over {4, 8, 16, 32}
 > with the tag on: reach at g ≥ 6 goes 0.012 → 1.000, and the machine's fact memory crosses from

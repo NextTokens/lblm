@@ -4491,7 +4491,7 @@ holds everything but the thing under test fixed — same event, same byte, same 
 
 ---
 
-## 89. The cheap fix: tagged vote cells MATCH a 64× larger table for 4 MB (`wstate.py` v14, `WSELTAG=1`)
+## 89. A shallow-cell write rule buys a 64× larger table's memory for 4 MB — but not for the reason first claimed (`wstate.py` v14, `WSELTAG=1`)
 
 §87 established that the instrument's memory is 100 % collided at the adopted size and that de-colliding it
 repairs the machine's memory of its own facts while making compression monotonically worse. It did not say
@@ -4513,12 +4513,16 @@ candidate whose tag does not match **claims the cell, zeroing the previous owner
 | 2^22 (adopted) | 67 MB | **+0.412 [+0.256, +0.567]** | −0.7656 | **2.244060** | 0 | 0.010 |
 | 2^28 (§87's best) | 4.29 GB | −0.231 [−0.396, −0.062] | −0.3740 | 2.250980 | 0 | 0.010 |
 | **2^22 + tag** | **71 MB** | **−0.304 [−0.450, −0.144]** | **−0.2832** | 2.246269 | 206,269,075 | 0.267 |
-| 2^24 + tag | 138 MB | **−0.364 [−0.516, −0.201]** | −0.2806 | **2.253886** | 157,900,434 | 0.196 |
+| 2^24 + tag | 285 MB | **−0.364 [−0.516, −0.201]** | −0.2806 | **2.253886** | 157,900,434 | 0.196 |
 
 Change in `LA − LM` from the adopted 2^22: **−0.6425 [−0.8419, −0.4407]** buying 4.29 GB, against
 **−0.7155 [−0.8977, −0.5312]** buying 4 MB of tags, and −0.7763 [−0.9650, −0.5761] with tags at 2^24. The
 400 KB stream agrees on 1,604 paired events: +0.305 → −0.102 (2^28) versus −0.224 (tagged 2^22), changes
 −0.4075 [−0.7471, −0.1291] and −0.5296 [−0.7965, −0.2839].
+
+*The 2^22 and 2^28 rows are §87's arms re-scored on the 4,079 events also paired in the tagged runs (§87's
+population was 4,254, overlap 3,964), which is why they read +0.412 / −0.231 here against §87's
++0.384 / −0.237. The registered bar was set from §87's numbers and is unaffected.*
 
 * **T1 — PASS, comfortably.** The registered bar was to travel *half* the distance from the untagged 2^22 to
   the untagged 2^28 value (i.e. reach ≤ +0.074). Tagging travels **the whole distance for 1/60 of the memory**:
@@ -4528,61 +4532,78 @@ Change in `LA − LM` from the adopted 2^22: **−0.6425 [−0.8419, −0.4407]*
   400 KB stream: both include zero (one-sided p ≈ 0.19). **The supportable sentence is that 4 MB of tags
   MATCHES 4.29 GB of table, not that it beats it.** Found by an independent red-team; the point ordering was
   asserted in the draft without ever being given an interval.
-* **T2 — PASS.** Tagging makes bits/byte **worse** on both streams (2.244060 → 2.246269 at 2^22;
-  2.278784 → 2.279423 on the 400 KB stream), exactly as §86.8's data-per-cell account predicts. So the regime
-  story covers **eviction as well as dilution**, and the registered chance of falsifying it did not fire.
+* **T2 — PASS on the measured stream, but the regime story does not survive the full picture.** Tagging
+  makes bits/byte worse on both measured streams (2.244060 → 2.246269 at 2^22; 2.278784 → 2.279423 at
+  400 KB) and on the never-used calibration slice (+0.001901), which is what T2 registered. But on the
+  **2.7 MB train slice of the same continuous run it REVERSES** — 1.924315 → 1.922174, i.e. tagging is
+  **better** there by 0.002141 (and −0.000595 at 2^24). A single account in which de-collision always costs
+  bits at this scale therefore cannot be right; the sign depends on the slice. §89 records this and does not
+  resolve it.
   At 2^24 with tags the channel's entire value is gone: 2.253886 against a rail of 2.253037 — **the memory is
   at its best exactly where the compressor is worse than having no memory channel at all.**
-* **T3 — the mechanism, and it is violent.** 206 million cell takeovers in one pass, and 26.7 % of served
-  reads land on a cell owned by another key (against 1.0 % when untagged, which is the genuinely-empty case).
-  At 100 % collision a tag cannot create capacity; it decides *ownership*. That is the whole finding: the
-  gain comes from a cell being **one key's estimate instead of a blend of twenty-five**, and the cost is that
-  the owner changes constantly, which destroys the smoothing that was buying the compression.
+* **T3 — the churn, corrected.** 206 million cell takeovers in one pass: **58.7 % of all vote-cell reads**
+  land on a cell owned by another key and return the prior (26.7 % of the served fact-cue reads scored here,
+  measured at the outcome byte's first bit; 34.5 % across all eight of its bits), and a cell changes owner on
+  **57.9 % of writes — every 1.73 writes**. The "1.0 % when untagged" of the first draft is **not** an
+  empty-cell rate: every such row has exactly tied counts. Genuinely empty served cells are 0.0 % at 2^22 and
+  5.5 % at 2^28. At 100 % collision a tag cannot create capacity; it can only change who owns a cell and how
+  deep the counts get before the owner changes.
 
-### 89.1a The mechanism, measured: purity beats volume by nine to one
+### 89.1a The mechanism — my first answer was wrong, and the ablation that killed it
 
-The obvious alternative reading of T1 is that eviction is just a **recency filter** — a cell always holds
-whoever wrote last, so its statistics are fresh rather than *right*. The counts separate the two:
+The tagged cells hold **nine times fewer counts** than untagged ones (12.5 against 109.3 at 2^22; 13.0 against
+109.1 on the 400 KB stream) and, when the cue owns its cell, code the outcome's identity byte **3.1 bits
+better** (4.164 against 7.261; 4.131 against 7.098). §89's first draft read that as *purity beating volume* —
+"a cell being one key's estimate instead of a blend of twenty-five" — and concluded that **sharing, not
+scarcity, was the defect**.
 
-| run | counts in the cue's cell | cue owns the cell | `LA` when it owns it | `LA` when foreign | `LA` overall |
-|---|---|---|---|---|---|
-| 2^22 untagged | 109.3 | — (no tag; every read is a blend) | — | — | 7.261 |
-| 2^28 untagged | 64.5 | — | — | — | 5.102 |
-| **2^22 + tag** | **12.5** | 0.733 | **4.164** | 7.603 | 5.081 |
-| 2^24 + tag | 22.2 | 0.804 | 4.190 | 7.605 | 4.860 |
+**An independent red-team ran the ablation that separates the two, and it refutes that reading.** Two arms at
+the same 67 MB table, matched on rates:
 
-**A tagged cell holds nine times fewer counts and predicts the outcome's identity byte 3.1 bits better**
-(4.164 against 7.261). Twelve observations of the right association are worth far more than a hundred of a
-blend, which is not what a recency filter would give: freshness alone leaves an almost-empty cell, and an
-almost-empty cell reads at ~8 bits, which is exactly what the 26.7 % of *foreign* reads do (7.603). The tag's
-net effect is that purity gain on the 73 % of reads the cue owns, minus the 27 % it loses to another owner:
-0.733 × 4.164 + 0.267 × 7.603 = 5.08, the measured overall `LA`. **Sharing, not scarcity, was the defect.**
-The 400 KB stream agrees: counts 109.1 → 13.0, ownership 0.714, `LA` when owned 7.098 → **4.131**.
+| arm | `LA − LM` | `LA` | median cell occupancy |
+|---|---|---|---|
+| 2^22 untagged | +0.417 | 7.402 | 89 |
+| 2^28 untagged (4.29 GB) | −0.231 | 5.168 | — |
+| 2^22 + tag (as shipped in v14) | −0.315 | 5.099 | — |
+| **evict-only, read blind to ownership** | **−0.315** | 6.931 | — |
+| **no tags at all — random wipes and random refusals at matched rates, zero identity information** | **−0.227 [−0.419, −0.019]** | 7.429 | **1** |
 
-**The artifact that could have manufactured T1, and did not.** A foreign-tag read returns exactly 0.5, i.e.
-8 bits for the byte, so it inflates whichever of `LA` / `LM` it lands on; if the C-MATCH partner's cell were
-foreign more often, `LA − LM` would fall for free. An independent red-team measured the per-bit rates — the
-**cue's** cell is foreign on 36.71 % of bits against the partner's **36.27 %**, so the bias runs *against* the
-result — and then removed the mechanism entirely: on the **971 events where neither cell is foreign at any
-bit**, `LA − LM` = **−0.3018 [−0.4941, −0.1400]**, statistically indistinguishable from the headline −0.3037.
-The dose-response runs the same way: −0.3018 with no foreign bits and +0.0397 in the most-neutral stratum, so
-neutral reads *dilute* the effect toward zero rather than creating it. Decomposed, the foreign bits contribute
-+0.0356 to `LA − LM` and the owned bits −0.3392 — all of it.
+Paired against the shipped tag, the read-blind arm differs by −0.0002 [−0.1783, +0.1882] and the fully
+key-agnostic arm reaches **99.3 % of the whole 2^22 → 2^28 travel** with cells holding a median of **one
+count**. **The tag's identity information is not what moves the number; keeping the cells shallow is** — and
+a wipe that knows nothing about keys does it equally well. The "one owner instead of twenty-five" sentence and
+"sharing, not scarcity, was the defect" are therefore **withdrawn**.
+
+What is licensed instead: *at a fixed 67 MB table, a write rule that keeps vote cells shallow moves `LA − LM`
+as far as a 64× larger table does, for 4 MB and about 0.0022 bits/byte. Why shallowness helps is not
+established, and a key-agnostic rule does it too.* A registered replication with a shallowness control as a
+required arm is the open item; this ablation was post-hoc, run by the red-team (`rt89/claimlens/`), and should
+be treated as §86.5 was — a finding that still needs its own registration.
 
 ### 89.2 What this settles
 
-**The machine's memory was never too small — it was too shared.** Giving each cell a single owner for 4 MB
-recovers as much of the machine's memory of its own facts as making the table sixty times larger, and it costs
-the compression that the sharing was providing. §87 showed the two objectives diverge; §89 shows the cheapest
-way to move along that trade-off, and that you cannot have both on this instrument at this scale.
+**Not what the first draft said.** The honest summary is narrower and still useful:
 
-**It also strengthens the engine's pending decision.** §86.6 measured `BLSELTAG=1` *improving* the engine's
-bits/byte (+0.000374…+0.000935 held out, 0.194567 on full enwik8) while the same mechanism *worsens* the
-instrument's. That is not a contradiction — it is §86.8's regimes: at 11–100 MB the engine's cells have enough
-evidence that merging only corrupts, so eviction pays twice; at 2.7 MB of training text the instrument is
-still in the regime where merging smooths. **The engine can have the memory and the compression; the
-instrument must choose.** The owner's open call on adopting `BLSELTAG=1` now has a mechanism behind it and a
-fact-level reason, not only a bits/byte gain.
+1. **A cheap write rule reaches the big table's fact-level memory.** Parity with 2^28 at 1/60 of the memory,
+   on both streams, past the registered bar, with every mechanical property independently verified.
+2. **It is not the tag's identity information that does it.** A key-agnostic shallow-cell rule does the same.
+3. **It costs bits on held-out text and saves them on training text**, so the §86.8 regime account, which
+   §89's draft claimed to confirm, is left **open** rather than confirmed.
+
+**What §89 does NOT claim** — the block the first draft omitted entirely, and every item is load-bearing:
+
+* **The machine still does not recall facts.** Cue evidence at the tagged arm is **−0.2832**: consulted, the
+  memory still pushes away from the byte that occurs.
+* **Consulting the cue still costs bits.** The served gain — the readout's own verdict — is −0.00462
+  [−0.00897, −0.00038] over served fact events at the tagged arm and −0.00763 [−0.01288, −0.00252] at 2^24,
+  i.e. significantly negative at the arm §89 calls the memory's best.
+* **The repaired cell is still worse than the plain rail at naming the fact.** 5.105 bits against the rail's
+  3.746 on the same bytes, and the arm's own coded cost of that byte gets monotonically *worse* with every
+  step of the repair (3.725 → 3.754 against the rail's 3.746).
+* **Nothing here is measured on the engine.** §86.6 shows the engine's tag pays in bits/bit; whether it
+  repairs the engine's *fact-level* memory is unmeasured, and §87's whole finding is that bits/bit cannot
+  answer that question. The first draft's "the engine can have the memory and the compression; the instrument
+  must choose" is withdrawn as unlicensed.
 
 ### 89.3 §89A, the selection ladder: the gate was serving the cues whose memory was least needed
 
