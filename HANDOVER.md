@@ -1,4 +1,36 @@
-# HANDOVER — the LBLM intelligence track, post-§87
+# HANDOVER — the LBLM intelligence track, post-§89
+
+> **§89 update (2026-09-17) — the cheap fix. Read ledger §89, then §87.**
+>
+> **The machine's memory was never too small; it was too shared.** An 8-bit tag per vote cell with
+> evict-on-mismatch (`WSELTAG=1`, v14, default OFF and bit-identical when off) costs **4 MB on a 67 MB table**
+> and recovers **more** of the machine's memory of its own facts than a **4.29 GB** table does. On §87's
+> estimand (paired `LA − LM`, 4,079 service-matched events, 890 KB stream): adopted 2^22
+> **+0.412 [+0.256, +0.567]** → 2^28 −0.231 [−0.396, −0.062] → **tagged 2^22 −0.304 [−0.450, −0.144]**.
+> Change from adopted: −0.6425 for 4.29 GB versus **−0.7155 for 4 MB**. Both streams agree.
+>
+> **And it costs compression, as registered.** Tagging makes bits/byte worse on both streams — §86.8's
+> data-per-cell account covers eviction as well as dilution. At 2^24 with tags the channel's whole value is
+> gone (2.253886 against a rail of 2.253037): **the memory is best exactly where the compressor is worse than
+> having no memory channel at all.**
+>
+> **Mechanism (T3):** 206 M cell takeovers in one pass, 26.7 % of served reads landing on another key's cell.
+> At 100 % collision a tag cannot create capacity — it decides *ownership*. The gain is a cell being one key's
+> estimate instead of a blend of twenty-five; the cost is that the owner changes constantly, destroying the
+> smoothing that was buying the compression.
+>
+> **This strengthens the engine's pending decision.** §86.6 measured `BLSELTAG=1` *improving* the engine's
+> bits/byte while the same mechanism worsens the instrument's — not a contradiction but §86.8's regimes.
+> **The engine can have both; the instrument must choose.**
+>
+> **Next: §89A**, the selection ladder (`WSELTOPM` / `WSELPBD`, v13, bit-identical). With addressing now
+> cheaply fixable, selection is the binding constraint — the cue reaches the served set on 21 % of events and
+> 0.15 % beyond nine words. The ladder must *enlarge* the served set: §87 showed substitution costs the same
+> for a fact cue and a non-fact cue.
+
+---
+
+# Previous state (post-§87)
 
 > **§87 update (2026-09-17) — the fact-level instrument for real text. Read ledger §87 first.**
 >

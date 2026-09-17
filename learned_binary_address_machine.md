@@ -4491,6 +4491,76 @@ holds everything but the thing under test fixed — same event, same byte, same 
 
 ---
 
+## 89. The cheap fix: tagged vote cells buy more memory than 64× the table (`wstate.py` v14, `WSELTAG=1`)
+
+§87 established that the instrument's memory is 100 % collided at the adopted size and that de-colliding it
+repairs the machine's memory of its own facts while making compression monotonically worse. It did not say
+how cheaply that repair can be bought: §87's ladder *dilutes* collisions (4.29 GB at 2^28), while the engine's
+§86.6 tag *evicts* them (8 MB). §89B ports eviction into the instrument and asks which is the better buy.
+Registered in `scratchpad/p87/prereg_89B.md` before any tagged run, on §87's load-bearing estimand — the
+paired `LA − LM` over fact events served with a served C-MATCH partner, document-cluster bootstrap.
+
+**The change (v14, `WSELTAG=1`, default OFF and bit-identical when off).** An 8-bit tag per vote cell from
+hash bits below 42, independent of the index bits. A cell whose tag names a different key **reads as empty**
+and is never mutated, so `predict()` stays pure and §87's self-test S1 still holds; on the count update a
+candidate whose tag does not match **claims the cell, zeroing the previous owner first**. Cost at
+`WVBITS2 = 22`: **4 MB of tags on a 67 MB table**, against 4.29 GB for §87's 2^28 rung — a 60× difference.
+
+### 89.1 Result (890 KB stream, 4,079 paired service-matched events)
+
+| run | memory | `LA − LM` (95 % CI) | *e* (fact) | bits/byte | evictions | foreign reads |
+|---|---|---|---|---|---|---|
+| 2^22 (adopted) | 67 MB | **+0.412 [+0.256, +0.567]** | −0.7656 | **2.244060** | 0 | 0.010 |
+| 2^28 (§87's best) | 4.29 GB | −0.231 [−0.396, −0.062] | −0.3740 | 2.250980 | 0 | 0.010 |
+| **2^22 + tag** | **71 MB** | **−0.304 [−0.450, −0.144]** | **−0.2832** | 2.246269 | 206,269,075 | 0.267 |
+| 2^24 + tag | 138 MB | **−0.364 [−0.516, −0.201]** | −0.2806 | **2.253886** | 157,900,434 | 0.196 |
+
+Change in `LA − LM` from the adopted 2^22: **−0.6425 [−0.8419, −0.4407]** buying 4.29 GB, against
+**−0.7155 [−0.8977, −0.5312]** buying 4 MB of tags, and −0.7763 [−0.9650, −0.5761] with tags at 2^24. The
+400 KB stream agrees on 1,604 paired events: +0.305 → −0.102 (2^28) versus −0.224 (tagged 2^22), changes
+−0.4075 [−0.7471, −0.1291] and −0.5296 [−0.7965, −0.2839].
+
+* **T1 — PASS, past its bar.** The registered bar was to travel *half* the distance from the untagged 2^22 to
+  the untagged 2^28 value. Tagging travels **more than all of it**: at 1/60 of the memory it lands beyond the
+  2^28 rung on both streams, and its cue evidence (−0.283) also beats 2^28's (−0.374).
+* **T2 — PASS.** Tagging makes bits/byte **worse** on both streams (2.244060 → 2.246269 at 2^22;
+  2.278784 → 2.279423 on the 400 KB stream), exactly as §86.8's data-per-cell account predicts. So the regime
+  story covers **eviction as well as dilution**, and the registered chance of falsifying it did not fire.
+  At 2^24 with tags the channel's entire value is gone: 2.253886 against a rail of 2.253037 — **the memory is
+  at its best exactly where the compressor is worse than having no memory channel at all.**
+* **T3 — the mechanism, and it is violent.** 206 million cell takeovers in one pass, and 26.7 % of served
+  reads land on a cell owned by another key (against 1.0 % when untagged, which is the genuinely-empty case).
+  At 100 % collision a tag cannot create capacity; it decides *ownership*. That is the whole finding: the
+  gain comes from a cell being **one key's estimate instead of a blend of twenty-five**, and the cost is that
+  the owner changes constantly, which destroys the smoothing that was buying the compression.
+
+### 89.2 What this settles
+
+**The machine's memory was never too small — it was too shared.** Giving each cell a single owner for 4 MB
+recovers more of the machine's memory of its own facts than making the table sixty times larger, and it costs
+the compression that the sharing was providing. §87 showed the two objectives diverge; §89 shows the cheapest
+way to move along that trade-off, and that you cannot have both on this instrument at this scale.
+
+**It also strengthens the engine's pending decision.** §86.6 measured `BLSELTAG=1` *improving* the engine's
+bits/byte (+0.000374…+0.000935 held out, 0.194567 on full enwik8) while the same mechanism *worsens* the
+instrument's. That is not a contradiction — it is §86.8's regimes: at 11–100 MB the engine's cells have enough
+evidence that merging only corrupts, so eviction pays twice; at 2.7 MB of training text the instrument is
+still in the regime where merging smooths. **The engine can have the memory and the compression; the
+instrument must choose.** The owner's open call on adopting `BLSELTAG=1` now has a mechanism behind it and a
+fact-level reason, not only a bits/byte gain.
+
+**Next, unchanged by this result:** §89A, the selection ladder (`WSELTOPM` / `WSELPBD`, knobs added in v13 and
+verified bit-identical). §87 measured the cue reaching the served vote set on 21 % of events and 0.15 % beyond
+nine words; with addressing now cheaply fixable, selection is the binding constraint. §87's caution stands:
+the only selection intervention measured so far (substitution) costs the same for a fact cue and a non-fact
+cue, so the ladder must *enlarge* the served set to be informative.
+
+**Naming note.** `wstate.py`'s v12 docstring and the scratch outputs `_87_scale.txt` / `_88_lockout.txt` use
+"§87" and "§88" for the previous session's scale and lockout probes, whose results are recorded in ledger
+§86.4–§86.5. The ledger's §87 and §89 are these sections; docstring blocks v13 and v14 use the ledger numbering.
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").

@@ -299,6 +299,18 @@ all verified bit-identical (selleanu on 60 KB/25 KB: 2.372273 / 2.525331 with an
   §89's registered selection intervention is a ladder over these two knobs; §87's registration, the fact
   definition, the three estimands and the self-tests are in _factprobe.py.
 
+v14 (§89B, TAGGED VOTE CELLS): WSELTAG=1 (default "0", and every arm is bit-identical when off -- verified,
+selleanu 60/25 KB gives 2.372273 / 2.525331 with the code present and the knob off). An 8-bit tag per vote
+cell, taken from hash bits below 42 and so independent of the index bits (which are >= 42):
+    READ  (predict): a cell whose stored tag names a different key is read as EMPTY -- the (0.2/0.4) prior,
+          i.e. exactly 0.5 -- and is NEVER mutated, so predict() stays pure and §87's self-test S1 holds.
+    WRITE (_sel_apply's count update): a candidate whose tag does not match CLAIMS the cell, zeroing the
+          previous owner's counts first. Evict-on-mismatch is the policy §86.5 measured beating merging in
+          the engine (BLSELTAG); m.sel_evict counts the takeovers.
+  Cost at WVBITS2=22: 4 MB of tags on a 67 MB table, against 4.29 GB for §87's 2^28 rung. §89B's registered
+  criteria T1-T3 are in scratchpad/p87/prereg_89B.md; the estimand is §87's paired LA-LM on the
+  service-matched population.
+
 Words: maximal [A-Za-z0-9] runs, lowercased, FNV-1a rolling hash -> id (prefix-visible, like
 the core's word model). id 0 (no active word) -> zero embedding. The EMA of word embeddings is
 a running TOPIC vector -- long-range structure no order-n byte table represents.
@@ -426,6 +438,7 @@ SEL_UCLIP = 4.0     # usefulness clamp
 SEL_TOPM = int(os.environ.get("WSELTOPM", "4"))       # §87: env knob, default = the §81 literal
                     # vote-set size (matches WTOPM=4 of the §77 arms)
 SVBITS = int(os.environ.get("WVBITS2", "22"))      # §81 vote-table bits (flat, bounded; real corpora)
+SELTAG = os.environ.get("WSELTAG", "0") == "1"     # §89B: 8-bit tag per vote cell, evict on mismatch
 WNS = os.environ.get("WNS", "0") == "1"            # §81 corpus phase: PAQ nonstationary rule on the
                                                    # order tables (§78.2: cumulative counters are a weak rail)
 SEL_UGAIN = 4.0     # gate gain on u (u is an EWMA of clipped log-advantage, |u| ~ 0.1 at
@@ -537,6 +550,7 @@ class Model:
         self.use_match = arm in MATCH_ARMS     # §75 reconciliation arms: copy ON in the instrument
         self.lr, self.lr_rec, self.lr_emb, self.lr_s, self.lr_head = lr, lr_rec, lr_emb, lr_s, lr_head
         self.sel_diag = False      # §86: vote-contribution diagnostic (SEL_ARMS only; never changes a served p)
+        self._sel_tag = False      # §89B: tagged vote cells (set in the SEL_ARMS block below)
         self.NM = len(ORDERS)
         self.NIN = self.NM + ((M + 1) if self.use_state else 0)     # +1 = bucket expert
         self.NIN = self.NIN + (1 if self.use_match else 0)          # match/copy vote
@@ -619,6 +633,10 @@ class Model:
         if arm in SEL_ARMS:                        # §81 the simplest selector
             self.wcount = {}                       # (also for lean arms: no state block initializes it)
             self.svt = array("d", [0.0]) * (2 << SVBITS)   # flat (n0, n1) vote counts, bounded
+            self._sel_tag = SELTAG                 # §89B: tagged cells (evict on mismatch)
+            self.svtag = bytearray(1 << SVBITS) if SELTAG else None
+            self.sel_tagall = []                   # §89B: this byte's per-candidate 8-bit tags
+            self.sel_evict = 0                     # §89B: cells taken from a previous owner
             self.svmask = (1 << SVBITS) - 1
             self.suw = {}                          # per-word usefulness score (arm sel; EWMA of own-vote agreement)
             self.vsw = {}                          # CONTEXT-SELECTED vote weights: cx -> scalar
@@ -868,16 +886,29 @@ class Model:
             nall = len(self.sel_cand)
             p1all = [0.0] * nall
             keysall = [None] * nall
+            tags = [0] * nall if self._sel_tag else None
             vt = self.svt
             for t in range(nall):
                 wid, vctx = self.sel_cand[t][0], self.sel_cand[t][1]
                 h = (wid * 0x9E3779B97F4A7C15 ^ vctx * 0xC2B2AE3D27D4EB4F
                      ^ ((self.phase << 7 | self.cur) * 0x165667B19E3779F9)) & 0xFFFFFFFFFFFFFFFF
-                ix = ((h ^ (h >> 31)) * 0xBF58476D1CE4E5B9 >> 42) & self.svmask
+                hh = (h ^ (h >> 31)) * 0xBF58476D1CE4E5B9
+                ix = (hh >> 42) & self.svmask
                 j0 = 2 * ix
-                p1all[t] = (vt[j0 + 1] + 0.2) / (vt[j0] + vt[j0 + 1] + 0.4)
+                if self._sel_tag:
+                    # §89B: the tag uses low hash bits, independent of the index bits (>= 42). A cell whose
+                    # tag names a different key is read as EMPTY -- the (0.2/0.4) prior, i.e. exactly 0.5 --
+                    # and is never mutated here, so predict() stays pure (self-test S1).
+                    tg = (hh >> 8) & 0xFF
+                    tags[t] = tg
+                    if self.svtag[ix] != tg and (vt[j0] + vt[j0 + 1]) > 0.0:
+                        p1all[t] = 0.5
+                    else:
+                        p1all[t] = (vt[j0 + 1] + 0.2) / (vt[j0] + vt[j0 + 1] + 0.4)
+                else:
+                    p1all[t] = (vt[j0 + 1] + 0.2) / (vt[j0] + vt[j0 + 1] + 0.4)
                 keysall[t] = ix
-            self.sel_p1all = p1all; self.sel_keysall = keysall
+            self.sel_p1all = p1all; self.sel_keysall = keysall; self.sel_tagall = tags
             pm = 0.0
             p1s = []
             keys = []
@@ -1074,8 +1105,15 @@ class Model:
             self.vswg[cx] = gg
             self.vsw[cx] = self.vsw.get(cx, 0.0) + self.lr_vsw * g2 / (math.sqrt(gg) + 1e-4)
             vt = self.svt
-            for ix in self.sel_keysall:
+            for t_, ix in enumerate(self.sel_keysall):
                 j0 = 2 * ix; jy = j0 + y
+                if self._sel_tag:
+                    tg = self.sel_tagall[t_]
+                    if self.svtag[ix] != tg:
+                        if vt[j0] + vt[j0 + 1] > 0.0:
+                            vt[j0] = 0.0; vt[j0 + 1] = 0.0     # §89B: evict the previous owner
+                            self.sel_evict += 1
+                        self.svtag[ix] = tg
                 cy = vt[jy] + 1.0
                 if cy + vt[j0 + 1 - y] >= 255.0:
                     vt[jy] = cy * 0.5
