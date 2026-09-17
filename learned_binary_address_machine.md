@@ -4559,6 +4559,16 @@ net effect is that purity gain on the 73 % of reads the cue owns, minus the 27 %
 0.733 × 4.164 + 0.267 × 7.603 = 5.08, the measured overall `LA`. **Sharing, not scarcity, was the defect.**
 The 400 KB stream agrees: counts 109.1 → 13.0, ownership 0.714, `LA` when owned 7.098 → **4.131**.
 
+**The artifact that could have manufactured T1, and did not.** A foreign-tag read returns exactly 0.5, i.e.
+8 bits for the byte, so it inflates whichever of `LA` / `LM` it lands on; if the C-MATCH partner's cell were
+foreign more often, `LA − LM` would fall for free. An independent red-team measured the per-bit rates — the
+**cue's** cell is foreign on 36.71 % of bits against the partner's **36.27 %**, so the bias runs *against* the
+result — and then removed the mechanism entirely: on the **971 events where neither cell is foreign at any
+bit**, `LA − LM` = **−0.3018 [−0.4941, −0.1400]**, statistically indistinguishable from the headline −0.3037.
+The dose-response runs the same way: −0.3018 with no foreign bits and +0.0397 in the most-neutral stratum, so
+neutral reads *dilute* the effect toward zero rather than creating it. Decomposed, the foreign bits contribute
++0.0356 to `LA − LM` and the owned bits −0.3392 — all of it.
+
 ### 89.2 What this settles
 
 **The machine's memory was never too small — it was too shared.** Giving each cell a single owner for 4 MB
