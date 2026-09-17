@@ -4,10 +4,12 @@
 >
 > **The machine's memory was never too small; it was too shared.** An 8-bit tag per vote cell with
 > evict-on-mismatch (`WSELTAG=1`, v14, default OFF and bit-identical when off) costs **4 MB on a 67 MB table**
-> and recovers **more** of the machine's memory of its own facts than a **4.29 GB** table does. On §87's
+> and recovers **as much** of the machine's memory of its own facts as a **4.29 GB** table does (the paired
+> difference between them, −0.0730 [−0.2175, +0.0766], includes zero — an earlier draft claimed it was more). On §87's
 > estimand (paired `LA − LM`, 4,079 service-matched events, 890 KB stream): adopted 2^22
 > **+0.412 [+0.256, +0.567]** → 2^28 −0.231 [−0.396, −0.062] → **tagged 2^22 −0.304 [−0.450, −0.144]**.
-> Change from adopted: −0.6425 for 4.29 GB versus **−0.7155 for 4 MB**. Both streams agree.
+> Change from adopted: −0.6425 for 4.29 GB versus −0.7155 for 4 MB — statistically indistinguishable,
+> at **1/60 of the memory**. Both streams agree.
 >
 > **And it costs compression, as registered.** Tagging makes bits/byte worse on both streams — §86.8's
 > data-per-cell account covers eviction as well as dilution. At 2^24 with tags the channel's whole value is
@@ -23,10 +25,25 @@
 > bits/byte while the same mechanism worsens the instrument's — not a contradiction but §86.8's regimes.
 > **The engine can have both; the instrument must choose.**
 >
-> **Next: §89A**, the selection ladder (`WSELTOPM` / `WSELPBD`, v13, bit-identical). With addressing now
-> cheaply fixable, selection is the binding constraint — the cue reaches the served set on 21 % of events and
-> 0.15 % beyond nine words. The ladder must *enlarge* the served set: §87 showed substitution costs the same
-> for a fact cue and a non-fact cue.
+> **§89A ran, and it is the session's most consequential result.** Laddering `WSELTOPM` over {4, 8, 16, 32}
+> with the tag on: reach at g ≥ 6 goes 0.012 → 1.000, and the machine's fact memory crosses from
+> significantly **negative** (−0.0777 [−0.1038, −0.0549]) to significantly **POSITIVE**
+> (**+0.0409 [+0.0168, +0.0603]**) — the first net-informative fact memory this project has measured on real
+> text with an interval excluding zero. **And it is free:** bits/byte *improves* monotonically
+> (2.246269 → 2.242265), beating both the untagged shipped configuration (2.244060) and the rail (2.253037).
+> So §89's "the instrument must choose" is too broad — the choice is forced by the *addressing* lever, not the
+> *selection* one.
+>
+> **Why the shipped gate was wrong, measured within one run.** At `WSELTOPM = 32` every cue is served, so the
+> gate no longer decides — but its weight is still recorded. Splitting the identical 26,204 events by it:
+> the quartile the gate most wants (Q4) is the **only one whose evidence is not positive** (−0.0238), while
+> Q3 is the best (+0.0892 [+0.0698, +0.1049]). Q4's cells are the most *accurate* (`LA` 5.313) and the least
+> *useful*, because its mean distance is 3.9 words — a cue three words back is one the order models already
+> cover. **The gate optimises accuracy and recency; the mixture needs marginal information.**
+>
+> **Next: the readout**, §87's untouched third limit. The served gain in bits is still ≈ 0 at fact outcomes
+> (−0.00003) even at `WSELTOPM = 32`. §86.3 says the bucketed fix is the worst arm on real text, so it must be
+> per-word or per-cell.
 
 ---
 

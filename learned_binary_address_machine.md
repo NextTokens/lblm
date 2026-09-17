@@ -4491,7 +4491,7 @@ holds everything but the thing under test fixed — same event, same byte, same 
 
 ---
 
-## 89. The cheap fix: tagged vote cells buy more memory than 64× the table (`wstate.py` v14, `WSELTAG=1`)
+## 89. The cheap fix: tagged vote cells MATCH a 64× larger table for 4 MB (`wstate.py` v14, `WSELTAG=1`)
 
 §87 established that the instrument's memory is 100 % collided at the adopted size and that de-colliding it
 repairs the machine's memory of its own facts while making compression monotonically worse. It did not say
@@ -4520,9 +4520,14 @@ Change in `LA − LM` from the adopted 2^22: **−0.6425 [−0.8419, −0.4407]*
 400 KB stream agrees on 1,604 paired events: +0.305 → −0.102 (2^28) versus −0.224 (tagged 2^22), changes
 −0.4075 [−0.7471, −0.1291] and −0.5296 [−0.7965, −0.2839].
 
-* **T1 — PASS, past its bar.** The registered bar was to travel *half* the distance from the untagged 2^22 to
-  the untagged 2^28 value. Tagging travels **more than all of it**: at 1/60 of the memory it lands beyond the
-  2^28 rung on both streams, and its cue evidence (−0.283) also beats 2^28's (−0.374).
+* **T1 — PASS, comfortably.** The registered bar was to travel *half* the distance from the untagged 2^22 to
+  the untagged 2^28 value (i.e. reach ≤ +0.074). Tagging travels **the whole distance for 1/60 of the memory**:
+  −0.7155 [−0.8977, −0.5312] against the bar. **It does not beat the 2^28 rung, and the ledger's first draft
+  said it did.** The paired difference tagged-2^22 minus untagged-2^28, on §89's own estimand, population and
+  bootstrap, is **−0.0730 [−0.2175, +0.0766]** on the 890 KB stream and −0.1222 [−0.3274, +0.1193] on the
+  400 KB stream: both include zero (one-sided p ≈ 0.19). **The supportable sentence is that 4 MB of tags
+  MATCHES 4.29 GB of table, not that it beats it.** Found by an independent red-team; the point ordering was
+  asserted in the draft without ever being given an interval.
 * **T2 — PASS.** Tagging makes bits/byte **worse** on both streams (2.244060 → 2.246269 at 2^22;
   2.278784 → 2.279423 on the 400 KB stream), exactly as §86.8's data-per-cell account predicts. So the regime
   story covers **eviction as well as dilution**, and the registered chance of falsifying it did not fire.
@@ -4534,10 +4539,30 @@ Change in `LA − LM` from the adopted 2^22: **−0.6425 [−0.8419, −0.4407]*
   gain comes from a cell being **one key's estimate instead of a blend of twenty-five**, and the cost is that
   the owner changes constantly, which destroys the smoothing that was buying the compression.
 
+### 89.1a The mechanism, measured: purity beats volume by nine to one
+
+The obvious alternative reading of T1 is that eviction is just a **recency filter** — a cell always holds
+whoever wrote last, so its statistics are fresh rather than *right*. The counts separate the two:
+
+| run | counts in the cue's cell | cue owns the cell | `LA` when it owns it | `LA` when foreign | `LA` overall |
+|---|---|---|---|---|---|
+| 2^22 untagged | 109.3 | — (no tag; every read is a blend) | — | — | 7.261 |
+| 2^28 untagged | 64.5 | — | — | — | 5.102 |
+| **2^22 + tag** | **12.5** | 0.733 | **4.164** | 7.603 | 5.081 |
+| 2^24 + tag | 22.2 | 0.804 | 4.190 | 7.605 | 4.860 |
+
+**A tagged cell holds nine times fewer counts and predicts the outcome's identity byte 3.1 bits better**
+(4.164 against 7.261). Twelve observations of the right association are worth far more than a hundred of a
+blend, which is not what a recency filter would give: freshness alone leaves an almost-empty cell, and an
+almost-empty cell reads at ~8 bits, which is exactly what the 26.7 % of *foreign* reads do (7.603). The tag's
+net effect is that purity gain on the 73 % of reads the cue owns, minus the 27 % it loses to another owner:
+0.733 × 4.164 + 0.267 × 7.603 = 5.08, the measured overall `LA`. **Sharing, not scarcity, was the defect.**
+The 400 KB stream agrees: counts 109.1 → 13.0, ownership 0.714, `LA` when owned 7.098 → **4.131**.
+
 ### 89.2 What this settles
 
 **The machine's memory was never too small — it was too shared.** Giving each cell a single owner for 4 MB
-recovers more of the machine's memory of its own facts than making the table sixty times larger, and it costs
+recovers as much of the machine's memory of its own facts as making the table sixty times larger, and it costs
 the compression that the sharing was providing. §87 showed the two objectives diverge; §89 shows the cheapest
 way to move along that trade-off, and that you cannot have both on this instrument at this scale.
 
@@ -4549,11 +4574,61 @@ still in the regime where merging smooths. **The engine can have the memory and 
 instrument must choose.** The owner's open call on adopting `BLSELTAG=1` now has a mechanism behind it and a
 fact-level reason, not only a bits/byte gain.
 
-**Next, unchanged by this result:** §89A, the selection ladder (`WSELTOPM` / `WSELPBD`, knobs added in v13 and
-verified bit-identical). §87 measured the cue reaching the served vote set on 21 % of events and 0.15 % beyond
-nine words; with addressing now cheaply fixable, selection is the binding constraint. §87's caution stands:
-the only selection intervention measured so far (substitution) costs the same for a fact cue and a non-fact
-cue, so the ladder must *enlarge* the served set to be informative.
+### 89.3 §89A, the selection ladder: the gate was serving the cues whose memory was least needed
+
+With addressing bought for 4 MB, §87's second limit is the binding one: the cue is in the slot LRU on 100 % of
+fact events but in the served vote set on 21 %, and beyond nine words on 0.15 %. §89A ladders `WSELTOPM`
+(v13's env knob for `SEL_TOPM`) over {4, 8, 16, 32} at `WVBITS2 = 22` **with `WSELTAG=1`**, so the memory is
+§89B's good one and only selection varies. Registered in `scratchpad/p87/prereg_89A.md` before any rung ran,
+with the estimand amended — after §87's lesson — to **the pair `(P(served), E[e | served])` reported together,
+never their product alone**.
+
+| `WSELTOPM` | `P(served)` | `P(served \| g ≥ 6)` | `E[e \| served]` | mean *e* (95 % CI) | served gain | **bits/byte** |
+|---|---|---|---|---|---|---|
+| 4 (shipped) | 0.2166 | 0.0117 | −0.3587 | −0.0777 [−0.1038, −0.0549] | −0.00100 | 2.246269 |
+| 8 | 0.5497 | 0.2445 | −0.0029 | −0.0016 [−0.0264, +0.0187] | −0.00087 | 2.243713 |
+| 16 | 0.8972 | 0.8212 | +0.0450 | **+0.0404 [+0.0155, +0.0604]** | −0.00014 | 2.242631 |
+| 32 | 1.0000 | 1.0000 | +0.0409 | **+0.0409 [+0.0168, +0.0603]** | −0.00003 | **2.242265** |
+
+* **N1 — PASS.** Reach at `g ≥ 6` rises 0.0117 → 0.2445 → 0.8212 → 1.0000, ρ = +1.000.
+* **N2 — PASS on both clauses.** The unconditional mean crosses from significantly **negative** to
+  significantly **positive**, and the conditional term does not collapse — it *rises*, −0.3587 → +0.0450.
+  **This is the first time in this project that the machine's memory of a fact is net-informative on real
+  text with an interval that excludes zero.**
+* **N3 — and it is free.** bits/byte *improves* monotonically, 2.246269 → 2.242265, which also beats the
+  untagged shipped configuration (2.244060) and the rail (2.253037). **Unlike de-collision, enlarging the
+  served set moves memory and compression the same way.** §89.2's "the instrument must choose" is therefore
+  too broad and is corrected here: the choice is forced by the *addressing* lever, not by the *selection* one.
+
+**The cross-rung caveat, stated before the reading.** `e = f − f_without_cue` shrinks mechanically as `T`
+grows (dropping 1 of 32 moves the mixture less than 1 of 4), so the magnitudes are not comparable across
+rungs; only the sign change and the bits/byte column are. The clean test is within one run:
+
+**At `WSELTOPM = 32` every resident cue is served, so the gate no longer decides who is read — but its weight
+is still recorded.** Splitting the identical 26,204 events by the gate's own preference:
+
+| quartile of the gate's weight `a_cue` | n | mean *e* (95 % CI) | `LA` | mean distance *g* |
+|---|---|---|---|---|
+| Q1 — gate likes least | 6,552 | +0.0384 [+0.0305, +0.0462] | 5.716 | 14.22 |
+| Q2 | 6,551 | +0.0599 [+0.0453, +0.0724] | 5.674 | 8.67 |
+| Q3 | 6,551 | **+0.0892 [+0.0698, +0.1049]** | 5.562 | 6.32 |
+| Q4 — gate likes most | 6,550 | **−0.0238 [−0.0998, +0.0437]** | 5.313 | 3.88 |
+
+**The quartile the gate most wants to serve is the only one whose evidence is not positive**, and the
+`SEL_TOPM = 4` set is drawn from exactly that quartile. Q4 − Q1 = −0.0622 logits. The cause is visible in the
+last two columns: the gate's score is `SEL_UGAIN·u − SEL_PBD·k`, so it is dominated by recency (Q4's mean
+distance is 3.9 words, Q1's 14.2), and a cue three words back is one whose outcome the order models already
+have. Q4's cells are individually the *most accurate* (`LA` 5.313, the best of the four) and the *least
+useful*, because they are redundant. **The gate optimises cell accuracy and recency; what the mixture needs is
+marginal information.** That is a different objective, and it is the first cause-level statement §87's
+instrument has produced about the selector rather than the memory.
+
+**What §89A does not settle.** The served gain in bits is still ≈ 0 at fact events (−0.00003 at
+`WSELTOPM = 32`): the readout — §87's third limit, one shared `vsw` per (previous byte, phase, prefix) — still
+converts none of this into bits *at fact outcomes*, even though the stream's aggregate improves. Under §89A's
+registered branches, N1+N2 passing means the gate was the binding constraint and is now relieved; the next
+section is therefore the readout, and §86.3's finding that the bucketed fix is the worst arm on real text says
+it must be per-word or per-cell, not a re-bucketing.
 
 **Naming note.** `wstate.py`'s v12 docstring and the scratch outputs `_87_scale.txt` / `_88_lockout.txt` use
 "§87" and "§88" for the previous session's scale and lockout probes, whose results are recorded in ledger
