@@ -4195,6 +4195,12 @@ Data that shaped none of these decisions (the §80/§83 adoption standard):
 | enwik8 last 30 MB | 0.201343 | 0.200969 | +0.000374 | 0.200868 (+0.000475) | 0.200151 (+0.001192) |
 | repo code 770 KB | 0.181710 | 0.181123 | +0.000587 | — | — |
 
+Full-file headline with the tagged configuration (`BLSELTAG=1 SELVBITS=SELUBITS=26`, obits 25, 61 min):
+**full enwik8 0.194567 bits/bit (19.46 MB)** against the adopted default's 0.195780 (19.58 MB) — +0.001213,
+the largest single step of the §79–§86 arc and larger than `BLWNS`'s. The chain now reads 0.199145 (§79 base)
+→ 0.196841 (`BLWNS`) → 0.196123 (`+BLPVEC`) → 0.196021 (`+BLSEL` N16) → 0.195780 (N=2+b23, §84) →
+**0.194567 (`+BLSELTAG` at 2^26)**.
+
 Cost: 8 MB of tags at 2^23 (64 MB at 2^26), no measurable time. `BLSELTAG=1` is validated, documented and default
 OFF; adoption is the owner's decision under the §80 precedent, in its own reviewed commit.
 

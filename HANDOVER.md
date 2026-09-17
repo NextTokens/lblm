@@ -12,7 +12,9 @@
 > and the engine's 42 % colliding vote-cell reads are the same defect: collisions poison cells rather
 > than dilute them. An 8-bit tag (`BLSELTAG=1`, default OFF) buys ~3 address bits — held-out gains
 > +0.000374 (enwik8 tail) and +0.000587 (repo code), and +0.000935 on stdlib — for 8 MB, matching what
-> gigabytes of untagged table buy. Validated, documented, **not adopted**: the owner's call under §80.
+> gigabytes of untagged table buy. Full-file headline with it: **enwik8 0.194567 (19.46 MB)** vs the adopted
+> default's 0.195780 — +0.001213, the largest single step of the §79–§86 arc. Validated, documented,
+> **not adopted**: the owner's call under §80.
 >
 > **Two structural bugs in the standing record:** (1) `sellean`, the arm that produced §81's corpus
 > crossings, has NO learned selection (two stale `arm == "sel"` guards); the real arm is added as
