@@ -4025,6 +4025,196 @@ to 0.5 bits. Storage works; selection is slow; **the shared readout is the inter
 
 ---
 
+## 86. The §85 lever tested, two structural bugs found, and the memory's real constraint (`wstate.py` v11–v12, `strong.rs` §86 flags, `_fewshot_probe.py --grid86`, `_scale_probe.py`)
+
+An eight-hour continuous session on the intelligence path. Everything below was built with criteria written
+before the runs, self-tested, and attacked by independent red-team agents; two of the session's findings are
+defects in configurations earlier sections treat as settled.
+
+### 86.1 Two structural bugs in the standing record
+
+1. **`sellean` — the arm that produced §81's real-corpus crossings — has no learned selection.** When it was
+   created (commit `8b23201`) two `self.arm == "sel"` guards were left in place, so the lean arm never writes
+   the usefulness table: `len(suw)` is 0 after 20 KB where `sel` has 157,769 keys, and `sel_gk` is None. It is
+   `selpos` minus the state block: a position-only recency gate with a context-selected readout. Consequence:
+   §81's "the lean selector converts binding into net held-out wins" (stdlib +0.0008/+0.0041, wt103 +0.0039)
+   was measured on a channel with **no learned selection**, and §85.1's depth control inherited the same arm.
+   The arm §81 described is added here as `selleanu` (= `sel` without the EMA/bucket block); §86.3 measures it.
+2. **The shipped engine has had no bias input to its context-selected mixers since §82.** `nin = NWMAX` makes
+   `sts[nin] = 1.0` write the index the selector vote then overwrites on every bit, while index `NIN+PVD` — the
+   slot §79's own header documents as the bias — is never written and stays 0.0 for the whole run, with zero
+   gradient in all three weight sets. Verified by instrumentation (`bias_index_held_1.0 = 0` of 2,400,000 bits;
+   `sum|mixers[.][33]| = 0.0`). The final mixer keeps its own bias, so what was lost is the **per-context**
+   offset. Fixed behind `BLSELBIAS=1` (default OFF): +0.000013 at 11 MB, −0.000046 at 300 KB, with last-20 %
+   improving in 6 of 6 arms — a warm-up cost repaid only on long streams. Small, but the shipped default has
+   been computing a dot product with one hard-zero input since §83.
+
+### 86.2 The §85 lever on the probe: both fixes are necessary, and binding takes one exposure
+
+Arms (each = `sel` + one change; all reductions bit-identical to `sel`): `selrb` keys the vote's readout weight
+by a 4-way reliability bucket of the top candidate's usefulness instead of sharing one weight across all words;
+`selfa` replaces the fixed-rate usefulness EWMA with a count-adaptive rate (running mean early, §81 rate later);
+`selrbfa` is both. Registered criteria I1–I3 in `_fewshot_probe.py` before any run; a registered `selrs`
+(reliability-*scaled* vote) proved unrunnable — a closed loop where the scale is zero until the weight trains and
+the weight cannot train while the scale is zero — and is recorded as registered, vote-inactive, with a dated
+amendment adding a bootstrap-floor variant.
+
+**Registered verdict: `selrbfa` and `selrs2fa` pass all four criteria; `selrb` alone fixes interference only;
+`selfa` alone fixes speed only.** But the red-team then falsified the headline and the metric:
+
+- **The registered metric does not measure binding.** It scores the whole vote, so an arm can pass while the
+  bound cue's own contribution is negative: under `sel` the cue contributes −0.53…−0.92 bits at every exposure
+  where it is in the vote set, while I2a reads +1.075 (a pass). This is §85's own registration lesson recurring.
+  On the corrected **cue-attributable** metric (a serve-time counterfactual removing the cue from the mixture):
+
+| arm | cue contribution at k=1 | at k=10 | exposures to a useful binding |
+|---|---|---|---|
+| `sel` | 0.000 | −0.526 | never |
+| `selrb` | 0.000 | −1.122 | never |
+| `selfa` | −1.151 | +2.058 | 6 |
+| **`selrbfa`** | **+3.665** | **+8.646** | **1** |
+
+- **"Binds from the first exposure" is false.** At k=0 the cue contributes exactly 0.000 bits on 16/16 events
+  across both seeds; it is not in the vote set and its cell is empty. The honest claim is **one exposure**.
+- **What the k=0 gain actually is (a separate capability).** The machine still saves 5–7 bits at first sight,
+  entirely from non-cue candidates: trained only on familiar material, it has learned that when nothing in
+  working memory is trusted for this position the familiar continuation is *wrong*, and the bucket-0 readout
+  weight is negative on exactly the letter-discriminating bits (mean −0.61…−1.62 at bits 3–7, against +1.34…+3.74
+  under bucket 3). It fires before any novel outcome byte has been coded. That is **novelty detection**, not
+  memory, and it would fire identically if every new answer were swapped.
+- Interference is fixed: the known cues' benefit is the same in the polluted and clean pools (|d| 0.008/0.129
+  against a 0.3 tolerance), where `sel` loses 1.65 bits. `selrbfa` removes 98.6 %/98.8 % of the rail's
+  outcome-word cost — ceiling saturation, not open-ended headroom.
+
+### 86.3 The same fixes on real corpora: fast trust generalizes, reliability bucketing does not
+
+Lean arms, standard gate, nonstationary rail (§78.2), seed 0. Gain vs the rail in bits/byte:
+
+| arm | wt103 450/1200/2700 KB | stdlib 400/1200/2400 KB | code 100/200/400/585 KB |
+|---|---|---|---|
+| `sellean` (§81's arm, no learned selection) | −0.0001 / +0.0026 / +0.0039 | −0.0057 / +0.0008 / +0.0041 | −0.0087 / −0.0032 / −0.0038 / −0.0022 |
+| **`selleanu`** (learned selection restored) | **+0.0025 / +0.0056 / +0.0073** | −0.0044 / +0.0025 / **+0.0062** | −0.0090 / −0.0027 / −0.0026 / −0.0013 |
+| `selleanfa` (+ fast trust) | (pending) | −0.0038 / +0.0033 / **+0.0060** | −0.0084 / −0.0016 / −0.0023 / −0.0015 |
+| `selleanrb` (+ reliability buckets) | −0.0013 / +0.0029 / +0.0042 | −0.0203 / −0.0069 / −0.0004 | −0.0322 / −0.0224 / −0.0174 / −0.0117 |
+| `selleanrbfa` (both) | (pending) | −0.0103 / −0.0024 / +0.0028 | −0.0270 / −0.0129 / −0.0093 / −0.0062 |
+
+- **Learned selection does pay on real text**, and by more than §81 claimed with the wrong arm: `selleanu`
+  beats `sellean` at every size on all three corpora, and nearly doubles §81's headline wt103 crossing
+  (+0.0073 vs +0.0039 at 2.7 MB).
+- **The probe's decisive fix is probe-specific.** `selrb` is the worst arm on both corpora. The engine agrees:
+  in `strong.rs` the same mechanism is worth only +0.000023, and a retune of its thresholds to the engine's
+  measured quartiles made it *worse* at every setting tried (the best split is one large coherent trusted class,
+  not an even partition). Splitting a shared readout weight helps when the stream is half unfamiliar by
+  construction, and costs training signal when it is not.
+- Code never crosses the rail, as in §81.
+
+### 86.4 The engine's memory is collision-bound, not capacity-bound
+
+The adopted vote table is an untagged hashed table at 2^23. Growing it alone (no other change):
+
+| vote cells | corpus_big gain | enwik8 30 MB gain |
+|---|---|---|
+| 2^23 (adopted) | +0.000416 | +0.000323 |
+| 2^26 | +0.000865 | +0.001025 |
+| 2^28 | +0.001094 | +0.001794 |
+| 2^29 | — | +0.002101 |
+
+No saturation at 8.6 GB, and the usefulness table is irrelevant (growing it alone changes nothing; vote 2^25 with
+usefulness 2^23 equals both at 2^25). With capacity free, the 3-byte context key still beats 2-byte and 4-byte,
+so the key's resolution was never the issue.
+
+**Most of that appetite is collision damage.** An 8-bit tag with evict-on-mismatch (`BLSELTAG=1`, the discipline
+the engine's other tables already use) at 2^23:
+
+| corpus | current default | tagged 2^23 | gain | equivalent untagged size |
+|---|---|---|---|---|
+| corpus_big 11 MB | 0.215120 | 0.214659 | +0.000461 | 2^26 (1074 MB vs 142 MB) |
+| enwik8 30 MB | 0.202400 | 0.201987 | +0.000413 | — |
+| stdlib 10.6 MB | 0.124701 | 0.123766 | **+0.000935** | — |
+
+42 % of cell reads evict at 2^23, and evicting beats merging: colliding keys were *poisoning* the vote, not
+merely diluting it. Tagging buys roughly three address bits; about 60 % of what raw capacity bought was
+collision damage and 40 % genuine capacity. Tagged 2^26 (+0.001254 on enwik8) reaches 85 % of untagged 2^28 for
+1/67 of the memory. Combined with both §86 fixes, tagged 2^23 gives +0.000551 on enwik8. Default OFF; held-out
+validation in §86.6.
+
+**Domain mixing costs the channel a third of its value** and it is not a switching effect: interleaving two
+domains every 1 MB (+0.000192) and concatenating them (+0.000203) both lose against either domain alone
+(+0.000303 / +0.000312), while the engine's overall compression loses only 1.4 %. Larger tables recover part of
+it (66 % → 72 % retained), so it is capacity plus sharing, not switching.
+
+### 86.5 How many facts, how far — and why facts die (the day's unifying finding)
+
+`_scale_probe.py`, registered S1–S4, cue-attributable metric, 40 training exposures per fact: **all four pass** —
+`selrbfa` holds 8, 32 and 96 facts at a 24-word gap and binds at gaps of 24, 48 and 96 words, beating `sel` by
++3.0…+5.5 bits in every cell. But the interesting part was the failure mode, and a registered follow-up
+(`_lockout_probe.py`, §88 criteria D1–D3) then **overturned the first reading of it**.
+
+**Observed:** facts die all-or-nothing. A dead fact's cue enters the served vote set in 0 of its 20 test
+exposures and contributes exactly 0.000 bits. Dead rate 0/8, 0/32, **8/96**, and 1/8 at gaps of 48 and 96.
+
+**First reading (wrong):** a gate lockout — the cell looked perfect (49.5 counts, zero errors) while usefulness
+sat negative, apparently self-reinforced through §86.2's bucket-0 "don't trust memory" dial.
+
+**Corrected:** three candidate lockout fixes (optimistic initialisation of unseen trust, forced exploration, and
+removing the update gate) **all failed D1, and the diagnostics explain why the premise was wrong**: trust *was*
+updating (59 updates for dead and live facts alike), no other context shared the key, and the cue's own memory
+was genuinely no better than an average candidate. The "perfect cell" reading had inspected only bit 7, which is
+clean for every ASCII word. Dumping all eight bits shows **12 of 12 dead facts sit on a collided cell** carrying
+110–250 counts whose majority bit is *opposite* to their own outcome (pair 5, bit 6: 137.8/18.1 where the truth
+is 0/59). One corrupted bit costs ~3 bits and erases the fact. The gate was reporting the truth.
+
+**Causal confirmation** (post-hoc, table size the only change):
+
+| cell | vote table 2^22 | 2^24 | 2^26 |
+|---|---|---|---|
+| 96 facts, gap 24 | 8 dead, 0.795 bits/outcome | 2 dead, 0.196 | **0 dead, 0.076** |
+| 8 facts, gap 48 | 1 dead, 0.801 | 1 dead (collision re-lands on the same cell), 0.623 | **0 dead, 0.238** |
+
+Revived facts go from 4.5–7.4 bits to 0.03–0.10, while `train_bpb` barely moves — this is the memory, not general
+modelling. The 8-fact row at 2^24 is the control that makes it causal.
+
+**So §86.4 and §86.5 are one finding.** In the engine, 42 % of vote-cell reads collide at 2^23 and evicting beats
+merging; in the instrument, every dead fact is a collision. **The memory's limit is addressing, not capacity or
+selection, and collisions poison cells rather than dilute them.** §87's "capacity limit / graceful degradation"
+reading is corrected: at an adequate table the machine holds 96 of 96 facts at 0.076 bits per outcome.
+
+Caveats recorded: the scaling metric is un-normalised and grows with the number of facts, so its "190 % of the
+8-fact value" is not evidence about crowding; the gap axis saturates at ~27 distinct words because the distractor
+vocabulary has only 26; the collision test is post-hoc and deserves a registered replication; and the registered
+"dead" rule (0 of 20) is brittle — one forced exploration flipped it while recovering no value.
+
+### 86.6 Held-out validation of the engine fix
+
+Data that shaped none of these decisions (the §80/§83 adoption standard):
+
+| held-out corpus | current default | tagged 2^23 | gain | tagged + §86 fixes | tagged 2^26 |
+|---|---|---|---|---|---|
+| enwik8 last 30 MB | 0.201343 | 0.200969 | +0.000374 | 0.200868 (+0.000475) | 0.200151 (+0.001192) |
+| repo code 770 KB | 0.181710 | 0.181123 | +0.000587 | — | — |
+
+Cost: 8 MB of tags at 2^23 (64 MB at 2^26), no measurable time. `BLSELTAG=1` is validated, documented and default
+OFF; adoption is the owner's decision under the §80 precedent, in its own reviewed commit.
+
+### 86.7 Where this leaves the intelligence path
+
+- **The machine is an online associative memory that learns a new long-range fact from ONE exposure** and, with
+  §86.2's two fixes, no longer damages the facts it already holds when unfamiliar material arrives. That is the
+  clearest statement of the capability the strain actually has.
+- **Its binding limit is addressing, not capacity or selection.** Both the instrument's dead facts and the
+  engine's 42 % colliding reads are the same defect, and a tag fixes it for 8 MB (§86.4–86.6).
+- **A second capability was found, unlooked-for:** trained only on familiar material, the machine detects that a
+  context is novel and inverts its memory readout, saving 5–7 bits before it has any fact to recall (§86.2).
+- **Probe results do not transfer by default.** The reliability-bucketed readout is decisive on the probe, the
+  worst arm on real text, and near-noise in the engine (§86.3). Fast trust transfers; bucketing does not.
+- **Open, in order of value:** (1) a registered replication of the collision finding, and a tagged or checksummed
+  vote cell in the *instrument* (the engine has one now); (2) does an adequately addressed memory change the §81
+  corpus verdict — every corpus number to date was measured on a colliding table; (3) whether the novelty
+  detector is useful on its own; (4) the §85 lesson, now twice-learned: a metric over a whole channel does not
+  measure the part of the channel under test.
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").

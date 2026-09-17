@@ -80,6 +80,58 @@
 //! n_{1-y} = n_{1-y}/2 + 1. BLNSALL=1 (exploratory) applies the same rule to every count table: orders
 //! 0..7, sparse, word, word2 and the hashed high orders (not the ICM StateMap counts). BLPVEC>2 exits.
 
+//! §86 THREE SELECTOR REPAIRS (env BLSELRB / BLSELFA / BLSELTAG, all default OFF = bit-identical
+//! baseline): the two §85/§86 INSTRUMENT findings (wstate.py v11 arms `selrb` / `selfa`, whose
+//! implementations are the reference semantics) plus a capacity finding of the engine's own.
+//! BLSELRB=1 RELIABILITY-BUCKETED READOUT (`selrb`): §85 localised the few-shot failure at the
+//! SHARED readout weight -- ONE trust dial per context, so confidently-wrong votes on unfamiliar
+//! material drive it down (RMSProp) and take the reliable words' gain with them. The engine's analog
+//! of that dial is the vote input's MIXER WEIGHT (the vote is one input to all three mixers, whose
+//! weight sets are selected by (phase, prev byte) and (phase, order-2 hash)). So the vote input is
+//! SPLIT into SELRB_R=4 mutually exclusive inputs at sts[NWMAX..NWMAX+4]: exactly one carries
+//! stretch(pm) on a given bit and the other three are exactly 0.0, selected by the RELIABILITY BUCKET
+//! 0..3 of the usefulness u of the TOP-WEIGHTED candidate of the vote set (sel_T[0]) at thresholds
+//! SELRB_T0/T1/T2 (default 0.02/0.1/0.4, the instrument's SELRB_T). Each reliability class then owns
+//! its own weight in EVERY mixer with no change to the mixers' structure. The bucket is computed once
+//! per byte in the §82 forward (post-LRU, post-htail, before any bit of that byte is served), so it is
+//! the usefulness as of the previous byte end -- already-coded bytes only, exactly the instrument's
+//! timing -- and it is held for all 8 bits. The usefulness gate's wu accumulator reads the weight
+//! ACTUALLY used, |gmix[NWMAX+rb]| (the instrument's |vsw[(cx<<2)|rb]|). REDUCTION: SELRB_T0 huge ->
+//! every byte in bucket 0 -> bit-identical to BLSELRB=0.
+//! BLSELFA=1 FAST-ADAPTIVE TRUST (`selfa`): the §82 usefulness is a FIXED-rate EWMA (rate
+//! 1-SELUDC = 0.005), so a new word needs ~140 favourable updates to reach a known word's u although
+//! its own vote cell is accurate from exposure 1. The rate becomes count-adaptive per key,
+//! rate = max(1-SELUDC, SELFA_K/(n+1)) with n = the usefulness updates already applied to that
+//! (ctx,word) key: a new key converges like a running mean (1, 1/2, 1/3, ...) and decays into the §82
+//! rate after ~SELFA_K/(1-SELUDC) updates. n lives in a PARALLEL flat u8 table with the same size and
+//! the same hash as the usefulness table (so it shares its collisions), saturating at 255 -- for
+//! SELFA_K <= 1.27 the adaptive branch is already dead at n = 199, so the saturation is unreachable in
+//! effect. Same clamp and the same wu gate as §82. REDUCTION: SELFA_K=0 -> the fixed rate always ->
+//! bit-identical to BLSELFA=0.
+//! BLSELTAG=1 TAGGED VOTE CELLS (capacity/collision finding): the §82 vote table is UNTAGGED, so
+//! unrelated (word, ctx, phase, partial) keys silently MERGE their counts. Growing it 2^23 -> 2^28
+//! multiplies the channel's gain on enwik8-30MB by 5.5x (+0.000323 -> +0.001794, still climbing),
+//! which says the cells may be collision-bound rather than capacity-bound. This adds an 8-bit checksum
+//! tag per cell with evict-on-mismatch -- exactly the otag/sptag/wdtag discipline of every other flat
+//! table -- so a colliding key RESETS the cell instead of merging into it. The tag costs one byte per
+//! cell (2^SELVBITS bytes). REDUCTION: SELTAGW=0 (tag width 0) makes every tag match ->
+//! bit-identical to BLSELTAG=0.
+//! BLSELBIAS=1 THE MISSING MIXER BIAS (a defect in the SHIPPED default, found §86): §79 put the
+//! mixers' constant-1 bias at index NIN+PVD, after the 8 prefix dims. §82 then wrote
+//! `nin = if blsel { NWMAX }` -- but NWMAX is the index the selector vote itself writes on every
+//! bit (`sts[vi] = sel_f`), so `sts[nin] = 1.0` is overwritten before any dot product runs and
+//! index NIN+PVD is left untouched at 0.0 for the whole stream. Since §83 adopted BLSEL=1 as the
+//! default, the shipped engine has therefore run all three mixers (mixers / mixers2 / gmix) WITHOUT
+//! a bias input, and with one permanently dead input whose weight can never leave its 0.0 init
+//! (grad = e * sts[k] = 0). Measured on corpus.txt 300000 23: the bias index held 1.0 on 0 of
+//! 2400000 bits and index 33 was 0.0 on all of them; sum|mixers2[.][33]| = 0.0 after the run.
+//! BLSELBIAS=1 puts the constant 1.0 back on the free index NIN+PVD; the vote keeps NWMAX (and
+//! NWMAX..NWMAX+SELRB_R under BLSELRB), nw already spans it, so no array changes size. Effect is
+//! small and scale-dependent: corpus_big 11 MB obits 25 0.215120 -> 0.215107 (-0.000013), with
+//! BLSELTAG 0.214659 -> 0.214651, with BLSELTAG+RB+FA 0.214620 -> 0.214614; on the 300 KB
+//! corpus.txt it COSTS +0.000046 (0.230863 -> 0.230909) -- one more free parameter to learn, paid
+//! back only once the stream is long enough. Default OFF = bit-identical to §83.
+
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -98,6 +150,8 @@ const NW: usize = NIN + 1; // mixer weights (inputs + bias)
 const PVD: usize = 8; // §79 per-prefix vector dims (BLPVEC)
 const NWMAX: usize = NIN + PVD + 1; // §79 storage width; ACTIVE width nw = NW, or NIN+PVD+1 under BLPVEC=2
 const SELW: usize = NWMAX + 1;      // §82 storage width with BLSEL (one more input: the selector vote)
+const SELRB_R: usize = 4;           // §86 BLSELRB: reliability classes (the vote input splits into 4)
+const SELWR: usize = NWMAX + SELRB_R; // §86 storage width with BLSELRB (one vote input per class)
 
 // ---- §82 the lean selector port (wstate.py v10 §81; env BLSEL, default OFF = bit-identical) ----
 const SELSMAX: usize = 64;   // max word-slot depth (active = NSELSLOTS, default 32)
@@ -107,6 +161,13 @@ const SEL_PBD: f64 = 0.05;   // position (recency) bias per slot step
 const SEL_TSC: f64 = 2.0;    // softmax temperature
 const SEL_UDC: f64 = 0.995;  // usefulness EWMA decay
 const SEL_UCLIP: f64 = 4.0;  // usefulness clamp
+
+/// §86 BLSELRB: reliability bucket 0..3 of a usefulness value at the SELRB_T0/T1/T2 thresholds
+/// (the wstate.py `_rbucket` semantics).
+#[inline]
+fn rbucket(u: f64, t: &[f64; 3]) -> usize {
+    if u < t[0] { 0 } else if u < t[1] { 1 } else if u < t[2] { 2 } else { 3 }
+}
 
 #[inline]
 fn sel_mix(mut h: u64) -> u64 {
@@ -330,6 +391,27 @@ fn main() {
     let seltopm: usize = (envf("SELTOPM", 4.0) as usize).clamp(1, SEL_TOPM);   // §84 sweep
     let selvord: u32 = envf("SELVORD", 3.0) as u32;      // §84: vote/gate context width in bytes
     let selctxmask: u64 = if selvord >= 8 { u64::MAX } else { (1u64 << (8 * selvord)) - 1 };
+    // §86 (A) BLSELRB: split the vote input into SELRB_R mutually exclusive inputs, one per
+    // reliability class of the top-weighted candidate -> one mixer weight per class. Default OFF.
+    let blselrb = env::var("BLSELRB").map(|s| s == "1").unwrap_or(false);
+    let selrb_t = [envf("SELRB_T0", 0.02), envf("SELRB_T1", 0.1), envf("SELRB_T2", 0.4)];
+    // §86 (B) BLSELFA: count-adaptive usefulness rate (SELFA_K = 0 reduces to the §82 fixed rate).
+    let blselfa = env::var("BLSELFA").map(|s| s == "1").unwrap_or(false);
+    let selfa_k = envf("SELFA_K", 1.0);
+    let sel_urate = 1.0 - sel_udc;            // the §82 fixed EWMA rate
+    // §86 (C) BLSELTAG: 8-bit checksum tag per vote cell, evict-on-mismatch (SELTAGW=0 reduces to OFF).
+    let blseltag = env::var("BLSELTAG").map(|s| s == "1").unwrap_or(false);
+    let seltagw: u32 = envf("SELTAGW", 8.0) as u32;
+    let seltagmask: u8 = if seltagw >= 8 { 0xFF } else { ((1u16 << seltagw) - 1) as u8 };
+    // §86 (D) BLSELBIAS: give the three mixers a REAL bias input back under BLSEL. Default OFF.
+    // The defect: under BLSEL the bias index is nin = NWMAX, which is the very index the selector
+    // vote writes a few lines later (`sts[vi] = sel_f`, vi = NWMAX or NWMAX+sel_rb), so the
+    // constant 1.0 is overwritten on EVERY bit: mixers/mixers2/gmix have run bias-free since the
+    // §83 adoption of BLSEL=1 as the default. Index NIN+PVD is meanwhile never written by anybody
+    // and stays 0.0 forever (a dead input pinned at its 0.0 weight init). BLSELBIAS=1 moves the
+    // bias onto that free index -- nothing else writes it, the vote keeps NWMAX (+SELRB_R classes),
+    // and the active width nw already spans it, so no weight array changes size.
+    let blselbias = env::var("BLSELBIAS").map(|s| s == "1").unwrap_or(false);
     let mut sent_ctr: u32 = 0;
     // DEFAULT 2 since the §80 owner adoption of the §79 result (enwik8 0.199145 -> 0.196123,
     // decodability verified §79R); set BLPVEC=0 to recover the pre-§80 engine bit-identically.
@@ -342,8 +424,13 @@ fn main() {
     let blwns = env::var("BLWNS").map(|s| s != "0").unwrap_or(true);     // §79 NS rule on wdc/wdc2
     let ns_all = env::var("BLNSALL").map(|s| s == "1").unwrap_or(false); // §79 NS rule on every count table
     let ns_w = blwns || ns_all;
-    let nin = if blsel { NWMAX } else if blpvec == 2 { NIN + PVD } else { NIN };  // §82: bias index
-    let nw = if blsel { SELW } else if blpvec == 2 { NWMAX } else { NW };         // §82: active mixer width
+    // §86 BLSELBIAS=1 under BLSEL: bias at the free index NIN+PVD (the BLPVEC=2 slot) instead of
+    // NWMAX, which the vote overwrites. BLSELBIAS=0 keeps the §82/§83 (bias-free) indexing exactly.
+    let nin = if blsel { if blselbias { NIN + PVD } else { NWMAX } }
+              else if blpvec == 2 { NIN + PVD } else { NIN };  // §82: bias index
+    // §86: BLSELRB widens the active mixer by SELRB_R-1 (the vote's 4 reliability-class inputs)
+    let nw = if blsel { if blselrb { NWMAX + SELRB_R } else { SELW } }
+             else if blpvec == 2 { NWMAX } else { NW };                              // §82: active mixer width
 
     let mut raw = fs::read(path).expect("read input");
     if cap > 0 && raw.len() > cap { raw.truncate(cap); }
@@ -367,14 +454,14 @@ fn main() {
     // high orders: merged hashed tables (no tags), exactly like the Python
     let mut htab: Vec<Vec<u32>> = (0..NH).map(|_| vec![0u32; 2 * (1usize << HBITS)]).collect();
 
-    let mut mixers = vec![[0.0f64; SELW]; NSEL];
-    let mut mixers_g = vec![[0.0f64; SELW]; NSEL];
+    let mut mixers = vec![[0.0f64; SELWR]; NSEL];
+    let mut mixers_g = vec![[0.0f64; SELWR]; NSEL];
     // a SECOND context-selected mixer, partitioned by order-2 (prev_byte,prev2) instead of order-1
     const NSEL2: usize = 8 * 2048;
-    let mut mixers2 = vec![[0.0f64; SELW]; NSEL2];
-    let mut mixers2_g = vec![[0.0f64; SELW]; NSEL2];
-    let mut gmix = [0.0f64; SELW];
-    let mut gmix_g = [0.0f64; SELW];
+    let mut mixers2 = vec![[0.0f64; SELWR]; NSEL2];
+    let mut mixers2_g = vec![[0.0f64; SELWR]; NSEL2];
+    let mut gmix = [0.0f64; SELWR];
+    let mut gmix_g = [0.0f64; SELWR];
     let mut final_w = [0.3f64, 0.3, 0.2, 0.0]; // [w_sel, w_global, w_sel2, bias]
     let mut final_g = [0.0f64; 4];
     let mut apm1 = Apm::new(256 * 8, 33, 0.007);
@@ -422,6 +509,12 @@ fn main() {
     let mut sel_uw = 0.0f64;                           // per-byte sum |mixer weight on f|
     let mut sel_f = 0.0f64;                            // per-bit vote feature stretch(pm)
     let mut sel_active = false;                        // whether the per-bit caches are valid
+    let mut sel_u = [0.0f64; SELSMAX];                 // §86: the usefulness the gate read, per candidate
+    let mut sel_rb = 0usize;                           // §86 BLSELRB: this byte's reliability class
+    // §86 BLSELFA: per-key usefulness update counts, same size and hash as selut (u8, saturating)
+    let mut selun: Vec<u8> = if blsel && blselfa { vec![0u8; selusz] } else { Vec::new() };
+    // §86 BLSELTAG: one checksum tag per vote cell
+    let mut selvtg: Vec<u8> = if blsel && blseltag { vec![0u8; 1usize << selvbits] } else { Vec::new() };
 
     // §79 per-prefix vector state (tables allocated only when BLPVEC != 0)
     let pvsz = if blpvec != 0 { 1usize << sbits } else { 1 };
@@ -443,7 +536,7 @@ fn main() {
     let mut byte_pos: usize = 0;
     let mut htail: u64 = 0;
 
-    let mut sts = [0.0f64; SELW];
+    let mut sts = [0.0f64; SELWR];
     let mut oslot = [0usize; NM];
     let mut oreset = [false; NM];
     // indirect context models: per-context bit-history byte + an adaptive StateMap over the 256 histories
@@ -557,13 +650,24 @@ fn main() {
         // the mixers are already context-selected, which is the engine's analog of §81's own
         // context-selected weight). Reads EVERY candidate's cell (cells train for all, §81).
         if blsel {
+            // §86 BLSELRB: exactly ONE of the SELRB_R vote inputs carries the vote on any bit
+            if blselrb { for r in 0..SELRB_R { sts[NWMAX + r] = 0.0; } }
             if sel_active && sel_nc > 0 {
                 let ctx3 = htail & selctxmask;
                 for j in 0..sel_nc {
                     let h = sl2[j].wrapping_mul(0x9E37_79B9_7F4A_7C15)
                         ^ ctx3.wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
                         ^ (((phase << 7) | cur as usize) as u64).wrapping_mul(0x1656_67B1_9E37_79F9);
-                    let ix = ((sel_mix(h) >> (64 - selvbits)) as usize) & selvmask;
+                    let hm = sel_mix(h);
+                    let ix = ((hm >> (64 - selvbits)) as usize) & selvmask;
+                    // §86 BLSELTAG: checksum from the bits BELOW the index, evict-on-mismatch
+                    if blseltag {
+                        let want = (((hm >> (64 - selvbits - 8)) & 0xFF) as u8) & seltagmask;
+                        if selvtg[ix] != want {
+                            selvtg[ix] = want;
+                            selvt[2 * ix] = 0.0; selvt[2 * ix + 1] = 0.0;
+                        }
+                    }
                     sel_ix[j] = ix;
                     let (n0, n1) = (selvt[2 * ix], selvt[2 * ix + 1]);
                     sel_p1[j] = (n1 + 0.2) / (n0 + n1 + 0.4);
@@ -571,8 +675,10 @@ fn main() {
                 let mut pm = 0.0f64;
                 for t in 0..sel_nT { pm += sel_wT[t] * sel_p1[sel_T[t]]; }
                 sel_f = stretch(pm);
-                sel_uw += gmix[NWMAX].abs();
-                sts[NWMAX] = sel_f;
+                // §86: the gate must weigh the readout weight ACTUALLY used (instrument: |vsw[wk]|)
+                let vi = if blselrb { NWMAX + sel_rb } else { NWMAX };
+                sel_uw += gmix[vi].abs();
+                sts[vi] = sel_f;
             } else {
                 sts[NWMAX] = 0.0;
             }
@@ -844,7 +950,17 @@ fn main() {
                         if adv > 1.0 { adv = 1.0; } else if adv < -1.0 { adv = -1.0; }
                         let h = sel_mix(sel_gk ^ sl2[j].wrapping_mul(0x9E37_79B9_7F4A_7C15));
                         let ui = ((h >> (64 - selubits)) as usize) & selumask;
-                        let mut u = selut[ui] * sel_udc + (1.0 - sel_udc) * wu * adv;
+                        // §86 BLSELFA: rate = max(1-SELUDC, SELFA_K/(n+1)) -- a new key converges like
+                        // a running mean, then decays into the §82 fixed rate (SELFA_K=0 == §82).
+                        let mut u = if blselfa {
+                            let nk = selun[ui] as f64;
+                            if selun[ui] < 255 { selun[ui] += 1; }
+                            let r2 = selfa_k / (nk + 1.0);
+                            if r2 > sel_urate { (1.0 - r2) * selut[ui] + r2 * wu * adv }
+                            else { selut[ui] * sel_udc + (1.0 - sel_udc) * wu * adv }
+                        } else {
+                            selut[ui] * sel_udc + (1.0 - sel_udc) * wu * adv
+                        };
                         if u > SEL_UCLIP { u = SEL_UCLIP; } else if u < -SEL_UCLIP { u = -SEL_UCLIP; }
                         selut[ui] = u;
                     }
@@ -971,7 +1087,8 @@ fn main() {
                     for j in 0..sel_nc {
                         let h = sel_mix(ctx3 ^ sl2[j].wrapping_mul(0x9E37_79B9_7F4A_7C15));
                         let ui = ((h >> (64 - selubits)) as usize) & selumask;
-                        let mut ev = sel_ugain * selut[ui] - sel_pbd * j as f64;
+                        sel_u[j] = selut[ui];              // §86: the same u BLSELRB's bucket reads
+                        let mut ev = sel_ugain * sel_u[j] - sel_pbd * j as f64;
                         if ev > 12.0 { ev = 12.0; } else if ev < -12.0 { ev = -12.0; }
                         e[j] = ev;
                         if ev > mx { mx = ev; }
@@ -993,10 +1110,15 @@ fn main() {
                     }
                     if at <= 0.0 { at = 1.0; }
                     for t in 0..sel_nT { sel_wT[t] = a[sel_T[t]] / at; }
+                    // §86 BLSELRB: the reliability class of the TOP-WEIGHTED candidate (sel_T[0] holds
+                    // the largest mixture weight). Fixed for all 8 bits of the byte this forward serves,
+                    // and read from usefulness written at the PREVIOUS byte end -> per-bit causal.
+                    sel_rb = if blselrb { rbucket(sel_u[sel_T[0]], &selrb_t) } else { 0 };
                     sel_active = true;
                 } else {
                     sel_nT = 0;
                     sel_active = false;
+                    sel_rb = if blselrb { rbucket(0.0, &selrb_t) } else { 0 };  // §86: no candidates -> u = 0
                 }
             }
             // §79: a letter moves the prefix key to the new letters-only prefix; a non-letter KEEPS the
@@ -1029,9 +1151,9 @@ fn main() {
     let whole = tot / n as f64;
     let last = if tailn > 0 { tail / tailn as f64 } else { 0.0 };
     println!("corpus={}  bytes={}  bits={}  obits={}", path, raw.len(), n, obits);
-    println!("  flags: BLSTRIPW={} BLSTRIPH={} BLMSLOTS={} BLSOFT={} NSLOTS={} BLPVEC={} BLWNS={} BLNSALL={} LR_S={} BLSEL={} NSELSLOTS={} SELSENT={}",
+    println!("  flags: BLSTRIPW={} BLSTRIPH={} BLMSLOTS={} BLSOFT={} NSLOTS={} BLPVEC={} BLWNS={} BLNSALL={} LR_S={} BLSEL={} NSELSLOTS={} SELSENT={} BLSELRB={} BLSELFA={} BLSELTAG={} BLSELBIAS={} SELVBITS={} SELUBITS={}",
              strip_w as u8, strip_h as u8, use_slots as u8, blsoft as u8, nslots, blpvec, blwns as u8, ns_all as u8, lr_s,
-             blsel as u8, nselslots, selsent);
+             blsel as u8, nselslots, selsent, blselrb as u8, blselfa as u8, blseltag as u8, blselbias as u8, selvbits, selubits);
     println!("  blmrs-strong  whole-stream = {:.6}   last-20% = {:.6}  bits/bit   [{:.1}s, {:.1} Mbits/s]",
              whole, last, secs, (n as f64 / 1e6) / secs);
 }

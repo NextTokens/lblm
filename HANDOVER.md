@@ -1,4 +1,34 @@
-# HANDOVER — the LBLM intelligence track, post-§85
+# HANDOVER — the LBLM intelligence track, post-§86
+
+> **§86 update (2026-09-17) — an 8-hour session on the intelligence path. Read ledger §86 first.**
+>
+> **The capability, stated plainly:** the machine is an online associative memory that learns a new
+> long-range fact (a never-seen cue bound to a never-seen outcome, 24 words apart) from **ONE exposure**,
+> and with the two §86 fixes it no longer damages the facts it already holds when unfamiliar material
+> arrives. A second, unlooked-for capability: trained only on familiar material it detects a novel
+> context and *inverts* its memory readout, saving 5–7 bits before it has any fact to recall.
+>
+> **The binding limit is ADDRESSING, not capacity or selection.** The instrument's "dead facts" (8 of 96)
+> and the engine's 42 % colliding vote-cell reads are the same defect: collisions poison cells rather
+> than dilute them. An 8-bit tag (`BLSELTAG=1`, default OFF) buys ~3 address bits — held-out gains
+> +0.000374 (enwik8 tail) and +0.000587 (repo code), and +0.000935 on stdlib — for 8 MB, matching what
+> gigabytes of untagged table buy. Validated, documented, **not adopted**: the owner's call under §80.
+>
+> **Two structural bugs in the standing record:** (1) `sellean`, the arm that produced §81's corpus
+> crossings, has NO learned selection (two stale `arm == "sel"` guards); the real arm is added as
+> `selleanu` and beats it everywhere (wt103 2.7 MB +0.0073 vs +0.0039). (2) The shipped engine has had
+> no bias input to its context-selected mixers since §82 (`BLSELBIAS=1` fixes it; effect ~1e-5).
+>
+> **Probe results do not transfer by default:** the reliability-bucketed readout is decisive on the probe,
+> the *worst* arm on real text, and near-noise in the engine. Fast trust transfers; bucketing does not.
+>
+> **Method lesson, twice learned:** a metric over a whole channel does not measure the part under test.
+> §86's registered metric passed arms whose binding was actively harmful; the cue-attributable
+> counterfactual is the correct one and is what every §86 number above uses.
+
+---
+
+# Previous state (post-§85)
 
 **Scope:** everything needed to continue after the 2026-09-14…16 sessions (ledger §77–§85). Read this +
 ledger §84–§85 first, then §81 and §77–§79 as needed. §72–§76 remain as a record; §77.5 lists which of

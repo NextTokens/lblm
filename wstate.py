@@ -170,6 +170,121 @@ r_cue < g_cue pushes the cue further down. Three amended arms (word mode, WSLOTS
     attnmoe_uni_fc : g frozen at uniform 1/n (as attnmoe_uni), full-weight counts as attnmoe_fc  -> control for both amended arms.
   Every pre-existing arm (attnmoe, attnmoe_uni, attnmoe_orc included) is bit-identical to v9.
 
+v11 (§86, THE §85 LEVER -- the shared readout and slow trust, fixed directly): the §85 red-team localised two
+causes of the few-shot failure. (1) INTERFERENCE: the §81 readout weight vsw is ONE scalar per
+(prev byte, phase, partial) SHARED BY EVERY WORD, so a stream with unfamiliar outcomes produces confidently
+wrong votes (vote-only cost 4.9 bits), RMSProp drives that shared weight down (phase-5 weight 0.06 vs 0.84 in a
+known-only control) and the KNOWN cues' gain collapses 1.68 -> 0.51 bits although their gate weight, vote-set
+membership and own-cell accuracy are unchanged. (2) SLOW TRUST: suw is a fixed-rate EWMA starting at 0
+(rate 1 - SEL_UDC = 0.005), so a new word needs ~140 favourable updates to reach a known word's u (~0.55) even
+though its own vote cell is accurate from exposure 1. Five arms, each = sel plus ONE change (gate, vote set,
+counts, vector credit and every other part are sel's, unchanged):
+    selrb   : RELIABILITY-BUCKETED READOUT -- the readout weight is keyed (cx, rbucket) instead of cx, with
+              rbucket = 0..3 from the usefulness u of the TOP-WEIGHTED candidate of that byte's vote set (T[0];
+              u is the same suw value the gate reads, 0.0 when the key is unseen) at the three thresholds
+              SELRB_T (env "SELRB_T", default "0.02,0.1,0.4": u < 0.02 -> 0, < 0.1 -> 1, < 0.4 -> 2, else 3).
+              Same RMSProp rule and learning rate per keyed weight; the key is packed (cx << 2) | rbucket, so an
+              unreliable word's votes can no longer turn down the dial the reliable words read.
+    selrs   : RELIABILITY-SCALED VOTE -- the readout keeps the single cx weight, but the vote feature is scaled
+              f' = f * min(1, max(0, u_top / SELRS_U)) with u_top as above (env "SELRS_U", default 0.4;
+              SELRS_U <= 0 disables the scaling, the exact-reduction control). An untrusted vote reaches the
+              mixer attenuated, so it neither helps nor trains the shared weight.
+    selfa   : FAST-ADAPTIVE TRUST -- the usefulness EWMA rate is count-adaptive per key,
+              rate = max(1 - SEL_UDC, SELFA_K / (n_uk + 1)) where n_uk is the number of usefulness updates
+              already applied to that (gk, word) key (env "SELFA_K", default 1.0; 0.0 forces the fixed §81 rate,
+              the exact-reduction control). A new key converges like a running mean and decays to the §81 EWMA
+              rate after ~200 updates. Same clamp (SEL_UCLIP) and the same wu gating as §81.
+    selrbfa : selrb + selfa.        selrsfa : selrs + selfa.
+  AMENDMENT 2026-09-16 (written before any §86 grid run, after an independent red-team of the arms): selrs and
+  selrsfa AS REGISTERED CANNOT BOOTSTRAP, and are left exactly as registered. The readout gradient is the
+  gradient of the SERVED feature, g2 = (y - p) * sel_f with sel_f = stretch(pm) * scale, so scale = 0 (every
+  key unseen -> u_top = 0) gives g2 = 0 -> vsw stays exactly 0 -> the per-byte mean |vsw| gate (wu > 0.02 in
+  _sel_apply) never fires -> suw is never written (it has no other writer) -> u_top stays 0: a closed loop from
+  initialisation. Measured on the §86 training stream itself (word mode, WSLOTS=32, 1200 sentences, G=24,
+  seed 7; self-test T7): sel ends with 506 vsw keys, all 506 nonzero, max |w| 30.58 and 15,810 usefulness
+  keys (train_bpb 0.7601), while selrs and selrsfa end with 506 vsw keys of which 0 are nonzero, max |w| 0.0
+  and an EMPTY suw (train_bpb 0.7777) -- their vote term is identically zero on every bit, i.e. they are
+  "sel with the vote switched off". Two NEW arms (not part of the §86 registration)
+  carry the reliability-scaling idea instead:
+    selrs2   : selrs with a BOOTSTRAP FLOOR on the scale, f' = f * max(SELRS_F, min(1, max(0, u_top/SELRS_U)))
+               (env "SELRS_F", default 0.1; SELRS_F = 0 reduces exactly to selrs, the reduction control). An
+               untrusted vote still reaches the mixer at 10 % amplitude, which is enough to move vsw off zero
+               and open the usefulness gate, after which u_top and the scale can rise.
+    selrs2fa : selrs2 + selfa.
+  The registered selrs/selrsfa are still run in the grid and reported, with a vote-activity column, as
+  vote-inactive; _fewshot_probe.py's report86 excludes vote-inactive arms from the I1 verdict and from the
+  pre-registered STOP rule, since with a vote term that is identically zero in both pools the I1 difference no
+  longer measures shared-readout interference.
+  VOTE-CONTRIBUTION DIAGNOSTIC (off by default; it never changes a served prediction): with model.sel_diag = True
+  predict() also computes the counterfactual probability with the vsw*f term removed from the mixer dot, step()
+  accumulates the per-bit contribution cost_without_vote - cost_with_vote (bits SAVED by the vote; positive = the
+  vote helped) and _byte_end latches the finished byte's total in model.sel_vc (model.sel_vc_bit = the last bit).
+  §86 registration, grid and criteria I1-I3 (POOL16 vs the POOL8 control): _fewshot_probe.py --grid86.
+
+  LEAN COUNTERPARTS (2026-09-17, added so the §86 fixes can be measured on real corpora against the §81 rail,
+  which is the LEAN selector -- `sel` itself loses to the nonstationary baseline because of the inherited
+  EMA/bucket overhead, §81 ledger B2). All four have use_state=False (no M=32 EMA, no bucket expert; NIN 15
+  instead of 48, sel_rbase = NM = 7) and are otherwise their non-lean twin exactly:
+    selleanu    : `sellean` + the §81 contextual usefulness gate = `sel` without the EMA/bucket block. NOTE
+                  (bug found 2026-09-17): the shipped `sellean` is NOT `sel` minus the state block -- commit
+                  8b23201 flipped use_state/sel_rbase but left the two `arm == "sel"` guards in _sel_forward
+                  and _sel_apply, so `sellean` has a POSITION-ONLY gate and an EMPTY suw (measured: 0 suw keys
+                  vs 157,769 for `sel` on 20 KB wt103). `sellean` is therefore `selpos` minus the state block,
+                  and it is left bit-identical; `selleanu` is the arm §81's "lean" text describes, and it is
+                  the exact-reduction target and the honest one-change base of the three arms below.
+    selleanrb   : selleanu + the selrb readout change (weight keyed (cx, reliability bucket); SELRB_T).
+    selleanfa   : selleanu + the selfa usefulness change (count-adaptive trust rate; SELFA_K).
+    selleanrbfa : selleanu + both.
+  Exact reductions: SELRB_T thresholds that put every byte in ONE bucket make selleanrb == selleanu (the key
+  (cx << 2) | const is a bijection of cx), SELFA_K=0 makes selleanfa == selleanu, and both together make
+  selleanrbfa == selleanu -- bit-identical cost streams. selleanrbfa differs from selrbfa ONLY by the state
+  block. Directly "sellean + selrb/selfa" would be exact NO-OPS (with suw never written, u_top is always 0.0,
+  so the bucket is always 0 and the selfa branch never runs), which is why the base is selleanu.
+
+v12 (§88, BREAKING THE GATE LOCKOUT -- the §87 dead-fact finding): §87 measured how many facts this
+machine can hold and found that facts die ALL-OR-NOTHING. At P=96 pairs, 8 of 96 facts are permanently dead:
+the cue enters the served vote set in 0 of its 20 test exposures and contributes exactly +0.000 bits, while
+its OWN vote cell is perfect (n0=49.5, n1=0.0, identical to a live cue's). The difference is the gate: the
+contextual usefulness u of a dead cue is NEGATIVE (-0.13..-0.99) against +0.93..+0.96 for a live one, so its
+gate weight is 0.004..0.039 against 0.15..0.32 and it never reaches the top-SEL_TOPM. It is self-reinforcing
+through the §86 fix: the dead fact's deciding byte falls in reliability bucket 0/1 (u_top ~ 0), i.e. it is
+read through the "don't trust memory" dial, which is the same loop that stops u recovering. Dead facts also
+appear at P=8 with larger gaps (1/8 at G=48 and at G=96). Three arms, each = selrbfa plus ONE change (gate,
+vote set, counts, vector credit and every other part are selrbfa's, unchanged), plus their combination:
+    selrbfaopt : OPTIMISTIC INIT. An UNSEEN usefulness key returns SELOPT_U (env "SELOPT_U", default 0.25)
+                 instead of 0.0 wherever u is READ to make a decision -- the gate score
+                 (SEL_UGAIN * u - SEL_PBD * k) and the reliability bucket of the vote set's top candidate --
+                 so a never-tried candidate is given a trial. CHOSEN AND DOCUMENTED: the optimism DOES NOT
+                 DECAY and is never stored; it is the default-on-read while the key is absent from suw, and
+                 it disappears permanently at that key's first real update, whose EWMA still starts from the
+                 stored 0.0 (the suw.get(uk, 0.0) in _sel_apply is deliberately left at 0.0 -- "the stored
+                 value still starts from the first real update"). The no-candidates path of _sel_forward
+                 keeps u_top = 0.0: there is no key there to be unseen. SELOPT_U=0 -> selrbfa exactly.
+    selrbfaexp : EXPLORATION. On each byte that serves a vote, with probability SELEXP_P (env "SELEXP_P",
+                 default 0.02) one uniformly chosen resident candidate that is NOT in the vote set T is
+                 forced into it, replacing T's LOWEST-weighted member; the mixture weights a_k/A_T are
+                 renormalised as usual. T is kept sorted by -a, so T[0] -- and with it u_top and the
+                 reliability bucket -- is untouched, and the forced candidate (whose a is below every member
+                 of T) stays last. The draw is _sel_rand (splitmix64) over (sel_bpos, htail): sel_bpos is
+                 the number of bytes _sel_forward has already processed and htail the last 6 CODED bytes, so
+                 the randomness is a function of ALREADY-CODED state only -- causal (a byte flip cannot
+                 change any earlier byte's cost) and reproducible across runs and processes (no Python hash,
+                 no RNG object, no clock). One hash per byte gives the trial (salt 1) and the uniform pick
+                 (salt 2). With n <= SEL_TOPM candidates there is nothing outside T and no draw is made.
+                 SELEXP_P=0 -> selrbfa exactly.
+    selrbfaug  : UNGATED TRUST. _sel_apply's usefulness gate `wu > 0.02` -- the test that silences u exactly
+                 on the bytes read through a near-zero readout weight, which is the lockout loop -- becomes
+                 `wu > SELUG_T` (env "SELUG_T", default 0.0), so every served byte updates u. The update is
+                 still WEIGHTED by wu (a byte with |vsw| ~ 0 moves u by ~0) and still consumes selfa's
+                 count-adaptive trust budget, so the arm trades opening the loop against spending that
+                 budget on near-silent bytes; the probe records the per-key update count so which of the two
+                 happened is visible. SELUG_T=0.02 -> selrbfa exactly.
+    selrbfaoe  : selrbfaopt + selrbfaexp (both changes).
+  Every pre-existing arm is BIT-IDENTICAL to v11: the three knobs are read through per-arm attributes whose
+  values for every other arm are exactly the previous literals (_sel_u0 = 0.0, _sel_ugt = 0.02, _sel_exp
+  False), and sel_bpos/sel_expn/sel_expb are counters nothing outside SEL_EXP_ARMS reads.
+  §88 registration, cells and criteria D1-D3: _lockout_probe.py.
+
 Words: maximal [A-Za-z0-9] runs, lowercased, FNV-1a rolling hash -> id (prefix-visible, like
 the core's word model). id 0 (no active word) -> zero embedding. The EMA of word embeddings is
 a running TOPIC vector -- long-range structure no order-n byte table represents.
@@ -266,10 +381,29 @@ MOE_NOBQ_ARMS = ("attnmoe_fcnb",)                      # §79b: bq fixed at 0, n
 # B1 -> word-model-like value only (the §78 lesson repeats; no port). Neither -> the probe binding does
 # not transfer to real corpora at this scale; honest negative, no port, re-assess.
 #
-SEL_ARMS = ("sel", "selpos", "selorc4", "sellean")
+SEL_ARMS = ("sel", "selpos", "selorc4", "sellean",
+            "selrb", "selrs", "selfa", "selrbfa", "selrsfa",     # §86 (v11): the §85 lever
+            "selrs2", "selrs2fa",                                # §86 amendment 2026-09-16 (bootstrap floor)
+            "selleanu", "selleanrb", "selleanfa", "selleanrbfa",  # §86 LEAN counterparts (2026-09-17)
+            "selrbfaopt", "selrbfaexp", "selrbfaug", "selrbfaoe")  # §88 (v12): the lockout arms
+# The arms with NO M=32 EMA state and NO bucket expert (use_state False; sel_rbase = NM).
+SEL_LEAN_ARMS = ("sellean", "selleanu", "selleanrb", "selleanfa", "selleanrbfa")
 #   sel     : usefulness + position bias + context-selected readout   (THE HEADLINE)
 #   selpos  : position bias only, same readout                        -> isolates the readout fix
 #   selorc4 : vote set forced to {cue} + top-3 by gate (oracle_wid, probe-only diagnostic)
+#   selrb   : sel + readout weight keyed (cx, reliability bucket of the top-weighted candidate)   [§86]
+#   selrs   : sel + vote feature scaled by the top-weighted candidate's reliability                [§86]
+#   selfa   : sel + count-adaptive usefulness rate (running mean -> the §81 EWMA rate)             [§86]
+#   selrbfa : selrb + selfa.      selrsfa : selrs + selfa.                                         [§86]
+#   selrs2  : selrs + a bootstrap floor on the scale (SELRS_F); selrs2fa = selrs2 + selfa
+#             (§86 amendment 2026-09-16: selrs/selrsfa as registered cannot bootstrap -- see the v11 note)
+#   sellean : selpos WITHOUT the EMA/bucket block (position-only gate; suw is never read or written)
+#   selleanu: sellean + the §81 contextual usefulness gate = sel WITHOUT the EMA/bucket block   [§86 lean]
+#   selleanrb / selleanfa / selleanrbfa : selleanu + selrb / + selfa / + both                   [§86 lean]
+#   selrbfaopt : selrbfa + an UNSEEN usefulness key reads as SELOPT_U (optimistic init)             [§88]
+#   selrbfaexp : selrbfa + forced exploration of one candidate outside the vote set (SELEXP_P)      [§88]
+#   selrbfaug  : selrbfa + the usefulness update's wu gate lowered to SELUG_T (ungated trust)       [§88]
+#   selrbfaoe  : selrbfaopt + selrbfaexp                                                            [§88]
 SEL_PBD = 0.05      # position bias per slot step (recency prior; small enough that learned usefulness outranks ~12 slots of recency)
 SEL_TSC = 2.0       # softmax temperature (properly scaled scores; e is O(4) so a stays graded)
 SEL_UDC = 0.995     # usefulness EWMA decay (timescale ~200 bytes)
@@ -280,6 +414,32 @@ WNS = os.environ.get("WNS", "0") == "1"            # §81 corpus phase: PAQ nons
                                                    # order tables (§78.2: cumulative counters are a weak rail)
 SEL_UGAIN = 4.0     # gate gain on u (u is an EWMA of clipped log-advantage, |u| ~ 0.1 at
                     # probe scale; the gain puts a separated cue above ~12 slots of PBD)
+# §86 (v11) families and knobs. SEL_U_ARMS = the arms whose gate reads the learned usefulness and whose
+# byte-end routine updates it (§81 sel, the §86 arms and the four LEAN arms; selpos/selorc4/sellean keep
+# the position-only gate -- sellean reads/writes no usefulness at all, see the v11 LEAN note).
+SEL_U_ARMS = ("sel", "selrb", "selrs", "selfa", "selrbfa", "selrsfa", "selrs2", "selrs2fa",
+              "selleanu", "selleanrb", "selleanfa", "selleanrbfa",     # §86 lean counterparts (2026-09-17)
+              "selrbfaopt", "selrbfaexp", "selrbfaug", "selrbfaoe")    # §88 (v12)
+SEL_RB_ARMS = ("selrb", "selrbfa", "selleanrb", "selleanrbfa",   # readout weight keyed (cx, reliability bucket)
+               "selrbfaopt", "selrbfaexp", "selrbfaug", "selrbfaoe")   # §88: all four are selrbfa + one change
+SEL_RS_ARMS = ("selrs", "selrsfa", "selrs2", "selrs2fa")   # vote feature scaled by the top candidate's reliability
+SEL_RSF_ARMS = ("selrs2", "selrs2fa")     # ... and floored at SELRS_F so the scaled vote can bootstrap [§86 amd]
+SEL_FA_ARMS = ("selfa", "selrbfa", "selrsfa", "selrs2fa",
+               "selleanfa", "selleanrbfa",                 # count-adaptive usefulness rate
+               "selrbfaopt", "selrbfaexp", "selrbfaug", "selrbfaoe")   # §88: all four are selrbfa + one change
+SELRB_T = tuple(float(x) for x in os.environ.get("SELRB_T", "0.02,0.1,0.4").split(","))
+assert len(SELRB_T) == 3, SELRB_T          # u < T0 -> 0, < T1 -> 1, < T2 -> 2, else 3
+SELRS_U = float(os.environ.get("SELRS_U", "0.4"))    # scale = min(1, max(0, u_top / SELRS_U)); <= 0 -> scale 1
+SELRS_F = float(os.environ.get("SELRS_F", "0.1"))    # §86 amd: selrs2 family only -- scale floor; 0 -> selrs
+SELFA_K = float(os.environ.get("SELFA_K", "1.0"))    # rate = max(1 - SEL_UDC, SELFA_K / (n_uk + 1)); 0 -> §81 rate
+SEL_URATE = 1.0 - SEL_UDC                  # the §81 fixed EWMA rate (0.005)
+# §88 (v12): the lockout arms. Each is selrbfa + ONE change; see the v12 docstring paragraph.
+SEL_OPT_ARMS = ("selrbfaopt", "selrbfaoe")   # an UNSEEN usefulness key READS as SELOPT_U (optimistic init)
+SEL_EXP_ARMS = ("selrbfaexp", "selrbfaoe")   # forced exploration of a candidate outside the vote set
+SEL_UG_ARMS = ("selrbfaug",)                 # the usefulness update's wu gate lowered to SELUG_T
+SELOPT_U = float(os.environ.get("SELOPT_U", "0.25"))   # default-on-read for an unseen key; 0 -> selrbfa
+SELEXP_P = float(os.environ.get("SELEXP_P", "0.02"))   # exploration probability per served byte; 0 -> selrbfa
+SELUG_T = float(os.environ.get("SELUG_T", "0.0"))      # usefulness update gate on wu; 0.02 -> selrbfa
 # §78A: the slots[0] channel in isolation (use_state=False; orders 0..6 + these inputs only)
 W78_ARMS = ("wcnt", "pvec", "pvecr", "wcntpvec", "wcntpvecr")
 CNT_ARMS = ("wcnt", "wcntpvec", "wcntpvecr")         # exact count expert keyed (slots[0], phase, partial)
@@ -299,6 +459,35 @@ SUBWORD_ARMS = ("semfast",)                # v6: char-3gram-composed vector init
 MATCH_ARMS = ("matchbase", "matchslots")   # §75: the reconciliation test -- copy ON in the
 # instrument too. If slots' crossing collapses with the match channel present, the no-copy win
 # lived on the signal the match model harvests in production (repeated word usage).
+
+
+def _rbucket(u):
+    """§86 selrb: reliability bucket 0..3 of a usefulness value at the SELRB_T thresholds."""
+    if u < SELRB_T[0]:
+        return 0
+    if u < SELRB_T[1]:
+        return 1
+    if u < SELRB_T[2]:
+        return 2
+    return 3
+
+
+def _rscale(u):
+    """§86 selrs: the vote's reliability scale min(1, max(0, u / SELRS_U)); SELRS_U <= 0 -> 1.0 (off)."""
+    if SELRS_U <= 0.0:
+        return 1.0
+    s = u / SELRS_U
+    return 1.0 if s > 1.0 else (0.0 if s < 0.0 else s)
+
+
+def _sel_rand(pos, htail, salt):
+    """§88 selrbfaexp: a deterministic 64-bit draw (splitmix64 finaliser) from ALREADY-CODED state only --
+    the number of bytes coded so far and the last 6 coded bytes. No Python hash, no RNG object, no clock,
+    so the arm is reproducible across runs and processes, and nothing from the future can enter it."""
+    x = (pos * 0x9E3779B97F4A7C15 ^ htail * 0xC2B2AE3D27D4EB4F ^ salt * 0x165667B19E3779F9) & M64
+    x = ((x ^ (x >> 30)) * 0xBF58476D1CE4E5B9) & M64
+    x = ((x ^ (x >> 27)) * 0x94D049BB133111EB) & M64
+    return x ^ (x >> 31)
 
 
 def is_wb(b):
@@ -327,9 +516,11 @@ def clean_mask_det(train, test, K=13):
 class Model:
     def __init__(self, arm="baseline", lr=0.004, lr_rec=0.02, lr_emb=0.03, lr_s=0.02, lr_head=0.02, seed=0):
         self.arm = arm
-        self.use_state = arm not in ("baseline", "matchbase", "sellean") and arm not in W78_ARMS
+        self.use_state = (arm not in ("baseline", "matchbase") and arm not in SEL_LEAN_ARMS
+                          and arm not in W78_ARMS)
         self.use_match = arm in MATCH_ARMS     # §75 reconciliation arms: copy ON in the instrument
         self.lr, self.lr_rec, self.lr_emb, self.lr_s, self.lr_head = lr, lr_rec, lr_emb, lr_s, lr_head
+        self.sel_diag = False      # §86: vote-contribution diagnostic (SEL_ARMS only; never changes a served p)
         self.NM = len(ORDERS)
         self.NIN = self.NM + ((M + 1) if self.use_state else 0)     # +1 = bucket expert
         self.NIN = self.NIN + (1 if self.use_match else 0)          # match/copy vote
@@ -341,7 +532,7 @@ class Model:
             self.NIN += SD + 1                                     # SS77 pooled features + vote
         if arm in SEL_ARMS:
             self.NIN += SD                                         # §81 pooled features (the vote is read through its OWN context-selected weight, not a mixer input)
-            self.sel_rbase = self.NM + (M + 1 if self.use_state else 0)   # §81: r-feature base (no state block for sellean)
+            self.sel_rbase = self.NM + (M + 1 if self.use_state else 0)   # §81: r-feature base (no state block for SEL_LEAN_ARMS)
         if arm in XKEY_ARMS:
             self.NIN += 1                                          # word-expert feature
         if arm in ("semsim", "semfast"):
@@ -428,6 +619,31 @@ class Model:
             self.sel_T = []                        # candidate indices of the served vote set
             self.sel_f = 0.0; self.sel_cx = 0      # per-bit stretch(p_sel) and its context cell
             self.sel_gk = None                       # the gate key (cx) used for the byte being served
+            # §86: per-arm switches (precomputed: they are read on every bit)
+            self._sel_rb = arm in SEL_RB_ARMS
+            self._sel_rs = arm in SEL_RS_ARMS
+            self._sel_fa = arm in SEL_FA_ARMS
+            # §88 (v12): for every pre-existing arm these are exactly the literals they replace
+            # (_sel_u0 0.0, _sel_ugt 0.02, _sel_exp False), so those arms stay bit-identical.
+            self._sel_opt = arm in SEL_OPT_ARMS       # optimistic default-on-read for an UNSEEN key
+            self._sel_exp = arm in SEL_EXP_ARMS       # forced exploration outside the vote set
+            self._sel_u0 = SELOPT_U if self._sel_opt else 0.0     # ... the value an unseen key READS as
+            self._sel_ugt = SELUG_T if arm in SEL_UG_ARMS else 0.02   # the usefulness update's wu gate
+            self.sel_bpos = 0                        # bytes processed by _sel_forward (the draw's counter)
+            self.sel_expn = 0                        # ... forced explorations made (diagnostic)
+            self.sel_expb = 0                        # ... bytes that could have been explored (diagnostic)
+            self._sel_rsf = SELRS_F if arm in SEL_RSF_ARMS else 0.0   # §86 amd: selrs2's bootstrap floor
+            self.sel_rb = 0 if self._sel_rb else None   # reliability bucket of the byte's top candidate
+                                                        # (None = the §81 single-cx readout key)
+            self.sel_rsc = 1.0                       # §86 selrs: the vote's reliability scale for this byte
+            self.sel_utop = 0.0                      # §86: u of the TOP-WEIGHTED candidate of the vote set
+            self.sel_wk = 0                          # §86: the readout dict key used at the last served bit
+            self.sun = {}                            # §86 selfa: usefulness update counts per (gk, word)
+            self.sel_pnv = None                      # §86 diagnostic (see self.sel_diag): counterfactual p
+                                                     #     with the vsw*f term removed
+            self.sel_vc_bit = 0.0                    # ... the last bit's contribution (bits saved by the vote)
+            self.sel_vc_acc = 0.0                    # ... running sum over the byte being served
+            self.sel_vc = 0.0                        # ... the finished byte's total (latched at byte end)
         if arm in SEL_ARMS and arm not in getattr(self, "_sel_init_done", ()) :
             pass
             self.sel_r = [0.0] * SD                # pooled features r = sum_k a_k E_k
@@ -653,9 +869,16 @@ class Model:
                 pm += self.sel_wT[t] * p1all[ci]
             self.sel_p1 = p1s; self.sel_keys = keys
             f = stretch(pm)
+            if self._sel_rs:
+                f = f * self.sel_rsc              # §86 selrs: reliability-scaled vote feature
             cx = ((self.htail & 0xFF) << 10) | (self.phase << 7) | self.cur
             self.sel_f = f; self.sel_cx = cx
-            d += self.vsw.get(cx, 0.0) * f
+            rb = self.sel_rb
+            wk = cx if rb is None else ((cx << 2) | rb)     # §86 selrb: (cx, reliability bucket)
+            self.sel_wk = wk
+            if self.sel_diag:
+                self.sel_pnv = squash(d)          # §86 diagnostic: the SAME model with the vote term removed
+            d += self.vsw.get(wk, 0.0) * f
         return squash(d), sts
 
     def _bkey(self):
@@ -664,6 +887,15 @@ class Model:
     def step(self, y, learn):
         p, sts = self.predict()
         cost = -math.log2(p if y == 1 else 1 - p)
+        if self.sel_diag and self.arm in SEL_ARMS:
+            # §86 VOTE CONTRIBUTION (diagnostic only; the served p above is untouched): what this bit's
+            # cost would have been WITHOUT the vsw*f term, minus the cost actually paid.
+            if self.sel_pairs:
+                p0 = self.sel_pnv
+                self.sel_vc_bit = -math.log2(p0 if y == 1 else 1 - p0) - cost
+            else:
+                self.sel_vc_bit = 0.0             # no candidates -> no vote term was added
+            self.sel_vc_acc += self.sel_vc_bit
         if self.use_state and self.arm != "scrambled":
             sb = self.sbase; w = self.w; g = p - y          # dL/dz, nats
             for j in range(M):
@@ -717,7 +949,7 @@ class Model:
             # §81: the readout itself identifies the bytes where the vote matters -- accumulate
             # |vsw| to weight the usefulness update (dilutes the many bytes where the vote is
             # irrelevant, which otherwise reward merely-predictable words)
-            self.sel_uwacc += abs(self.vsw.get(self.sel_cx, 0.0))
+            self.sel_uwacc += abs(self.vsw.get(self.sel_wk, 0.0))   # §86: the readout cell actually used
         if self.arm in LEARNED_SLOT_ARMS:
             # exact credit to slot-embedding dims: mixer weight at predict time, per bit
             g = p - y
@@ -816,7 +1048,7 @@ class Model:
             # §81: train the CONTEXT-SELECTED vote weight on the final error, then give every
             # served candidate FULL-WEIGHT counts (the §79b lesson: shared responsibility starves cells)
             g2 = (y - p) * self.sel_f
-            cx = self.sel_cx
+            cx = self.sel_wk                      # §86: cx for sel, (cx, rbucket) for the selrb family
             gg = self.vswg.get(cx, 0.0)
             gg = 0.999 * gg + 0.001 * g2 * g2
             self.vswg[cx] = gg
@@ -874,6 +1106,9 @@ class Model:
             self.aGr = [0.0] * SD
             self.aGa = [0.0] * len(self.at_T)
         if self.arm in SEL_ARMS:
+            if self.sel_diag:                    # §86: the finished byte's vote contribution
+                self.sel_vc = self.sel_vc_acc
+                self.sel_vc_acc = 0.0
             # §81: same timing contract (the byte just SERVED, slots still pre-LRU)
             self._sel_apply(learn)
             if b == 46:                      # '.' ends the sentence: candidates are scoped to
@@ -1050,15 +1285,28 @@ class Model:
             self._match_after(b)
         return None
 
+    # ---- §86: the readout key this arm uses for a context cell at the byte being served ----
+    def sel_wkey(self, cx):
+        """sel/selrs/...: cx itself. selrb family: (cx, reliability bucket) packed as (cx << 2) | rbucket.
+        Mirrors predict() exactly (predict() inlines it); the probe uses it to read the weight of a cell."""
+        return cx if self.sel_rb is None else ((cx << 2) | self.sel_rb)
+
     # ---- §81 the simplest selector ----
     def _sel_forward(self):
         """query-free gate (usefulness + position bias) over the current slots -> serves the next byte."""
         sl = self.slots
+        self.sel_bpos += 1          # §88: bytes coded so far (already-coded state; the exploration draw)
         if not sl[0]:
             self.sel_pairs = []; self.sel_wT = []; self.sel_cand = []; self.sel_acc = []
             self.sel_T = []; self.sel_p1all = []; self.sel_keysall = []
             self.sel_r = [0.0] * SD; self.sel_Gr = [0.0] * SD
             self.at_n = 0; self.at_ks = []; self.at_a = []; self.at_T = []
+            self.sel_utop = 0.0                  # §86: no candidates -> u_top = 0 (bucket 0, scale 0/floor)
+            if self._sel_rb:
+                self.sel_rb = _rbucket(0.0)
+            if self._sel_rs:
+                sc = _rscale(0.0)
+                self.sel_rsc = sc if sc > self._sel_rsf else self._sel_rsf
             return
         ks = [k for k in range(S) if sl[k]]
         E = []
@@ -1072,11 +1320,12 @@ class Model:
         # §81: the usefulness key = the SAME 3-byte (VORD) context the vote cells key on --
         # one byte of context mixes the outcome byte with every word-start byte and the
         # separation dies (measured); three bytes isolate "after then " from "after golf "
-        gk = (self.htail & ((1 << (8 * VORD)) - 1)) if self.arm == "sel" else None
+        gk = (self.htail & ((1 << (8 * VORD)) - 1)) if self.arm in SEL_U_ARMS else None
         self.sel_gk = gk
         for k in ks:
-            if self.arm == "sel":
-                ev = SEL_UGAIN * self.suw.get((gk, sl[k]), 0.0) - SEL_PBD * k
+            if gk is not None:
+                # §88: _sel_u0 is 0.0 for every arm but SEL_OPT_ARMS, where an UNSEEN key reads as SELOPT_U
+                ev = SEL_UGAIN * self.suw.get((gk, sl[k]), self._sel_u0) - SEL_PBD * k
                 e.append(12.0 if ev > 12.0 else (-12.0 if ev < -12.0 else ev))
             else:
                 e.append(-SEL_PBD * k)
@@ -1096,11 +1345,37 @@ class Model:
                 T = sorted(range(n), key=lambda t: -a[t])[:SEL_TOPM]
         else:
             T = sorted(range(n), key=lambda t: -a[t])[:SEL_TOPM]   # stable: ties -> more recent slot
+        if self._sel_exp and n > SEL_TOPM:
+            # §88 selrbfaexp: with probability SELEXP_P force ONE candidate from outside T into it, in
+            # place of T's LOWEST-weighted member (T is sorted by -a, so that is T[-1], and the forced
+            # candidate -- whose a is below every member of T -- belongs last too: T[0], u_top and the
+            # reliability bucket are untouched). The weights are renormalised by the AT loop below, as usual.
+            self.sel_expb += 1
+            h = _sel_rand(self.sel_bpos, self.htail, 1)
+            if (h >> 11) * 1.1102230246251565e-16 < SELEXP_P:      # 2**-53
+                inT = set(T)
+                outs = [t for t in range(n) if t not in inT]
+                if outs:
+                    T[-1] = outs[_sel_rand(self.sel_bpos, self.htail, 2) % len(outs)]
+                    self.sel_expn += 1
         AT = 0.0
         for t in T:
             AT += a[t]
         if AT <= 0.0:
             AT = 1.0
+        if self._sel_rb or self._sel_rs:
+            # §86: the usefulness of the TOP-WEIGHTED candidate of the vote set (T is sorted by -a, so T[0]
+            # carries the largest mixture weight). suw is only written at byte end, so this is exact for the
+            # whole byte this forward serves.
+            utop = self.suw.get((gk, sl[ks[T[0]]]), self._sel_u0) if T else 0.0
+            self.sel_utop = utop
+            if self._sel_rb:
+                self.sel_rb = _rbucket(utop)
+            if self._sel_rs:
+                sc = _rscale(utop)
+                # §86 amendment: the selrs2 family floors the scale at SELRS_F (0 for the registered selrs,
+                # so selrs/selrsfa keep exactly the scale they were registered with).
+                self.sel_rsc = sc if sc > self._sel_rsf else self._sel_rsf
         r = [0.0] * SD
         for t in range(n):
             at_ = a[t]; Et = E[t]
@@ -1125,13 +1400,14 @@ class Model:
             self.sel_uwacc = 0.0
             return
         if learn:
-            if self.arm == "sel" and self.sel_acc and self.sel_gk is not None:
+            if self.arm in SEL_U_ARMS and self.sel_acc and self.sel_gk is not None:
                 lll = self.sel_acc
                 mu = sum(lll) / len(lll)
                 wu = self.sel_uwacc / 8.0            # mean |vsw| over the byte's bits
                 if wu > 1.0:
                     wu = 1.0
-                if wu > 0.02:                        # bytes where the vote is wanted at all
+                if wu > self._sel_ugt:               # bytes where the vote is wanted at all
+                                                     # (§88 selrbfaug: SELUG_T; 0.02 for every other arm)
                     for t in range(len(lll)):
                         adv = lll[t] - mu
                         if adv > 1.0: adv = 1.0
@@ -1139,7 +1415,18 @@ class Model:
                         wid = self.sel_cand[t][0]
                         uk = (self.sel_gk, wid)       # contextual: (byte's first-bit cx, word)
                         u = self.suw.get(uk, 0.0)
-                        u = SEL_UDC * u + (1.0 - SEL_UDC) * wu * adv
+                        if self._sel_fa:
+                            # §86 selfa: count-adaptive rate -- a new key converges like a running mean
+                            # (rate 1, 1/2, 1/3, ...) and decays to the §81 fixed rate after ~200 updates.
+                            nk = self.sun.get(uk, 0)
+                            self.sun[uk] = nk + 1
+                            r2 = SELFA_K / (nk + 1.0)
+                            if r2 > SEL_URATE:
+                                u = (1.0 - r2) * u + r2 * wu * adv
+                            else:
+                                u = SEL_UDC * u + (1.0 - SEL_UDC) * wu * adv
+                        else:
+                            u = SEL_UDC * u + (1.0 - SEL_UDC) * wu * adv
                         self.suw[uk] = max(-SEL_UCLIP, min(SEL_UCLIP, u))
             Gr = self.sel_Gr
             for wid, _vctx, at_, v in self.sel_cand:
