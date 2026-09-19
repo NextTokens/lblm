@@ -4727,6 +4727,47 @@ after deployment.
 
 ---
 
+## 91. The hybrid readout closes the readout story; the tag is adopted (`selhyb`, `--grid91`, `BLSELTAG` default ON)
+
+### 91A The spectrum's fourth point, measured — and the story closes
+
+`selhyb` (v16): each served candidate's vote read through **dial = A[context] + B[(context, word)]** —
+the shared prior A pools trust evidence (§81's strength) and trains on the exact pooled gradient; the
+per-word residual B isolates updates (§90's strength). Registered on the §86 grid before any run, with
+a pre-committed reverse-course rule: fail I1 or I3 → the readout story closes.
+
+| arm (G=24, seeds 7/8) | I1 k-matched | I2a few-shot vote | I2b speed | I3 known |
+|---|---|---|---|---|
+| sel (shared) | FAIL (1.58/1.70) | FAIL (+0.88) | never | reference |
+| seliso (per-word, §90) | FAIL (0.68/0.82) | PASS (+2.29) | **2 exp.** | FAIL (−1.49) |
+| **selhyb (hybrid)** | FAIL (0.96/0.86) | PASS (+2.10) | [1, 15] | **FAIL (−1.54)** |
+
+**The readout story is closed by its own registration.** The hybrid inherits seliso's POOL8 starvation
+(known gains −0.09/+0.00) — the shared prior A does not rescue the known cues, because at ~150 training
+exposures the base orders already predict outcome starts well and the pooled dial gradient is too weak
+to reach the saturation-like magnitudes the pure shared readout builds by concentrating every word's
+gradient in one cell (measured magnitudes: A ≤ 1.0, B ≤ 1.6 vs shared 30.6). The spectrum is now fully
+measured — shared (strong/interferes), bucketed (§86: probe-only), per-word (starves/2-exposure trust),
+hybrid (between, inherits the starvation) — and **the §85 lever's readout component is unsolved at this
+data scale**. The track moves to the other named limits (scope, saturation, scale); no further readout
+iterations on this probe. What stands: one-exposure storage (§85), 2-exposure trust under isolation
+(§90), and the whole spectrum's mechanism, all measured.
+
+### 91B `BLSELTAG=1` adopted as the engine default (the §80 standing directive)
+
+The decision set, complete: tagged vote cells beat the untagged default on **every corpus measured,
+held-out included** — corpus_big 0.215120 → 0.214659 (+0.000461, run today at HEAD), full enwik8
+0.195780 → **0.194567** (+0.001213, §86; §91 addendum re-verifies at HEAD), enwik8 last-30MB +0.000374,
+repo code +0.000587, stdlib +0.000935 (§86) — for 8 MB of tags. `SELTOPM` is inert at the adopted
+`NSELSLOTS=2` (4/8/16/32 all 0.214659 — top-m ≥ 2 saturates with two candidates), so §89A's instrument
+ladder does not generalise to the engine as-is. `BLSELTAG=0` recovers the untagged engine
+bit-identically (0.230863 @300 KB); new 300 KB reference **0.230742**. The §87/§89 instrument-stream
+cost of tagging remains real and the §86.8 regime account stays open — recorded, not resolved; the
+engine evidence was uniform, which is what the §80 precedent requires.
+
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").

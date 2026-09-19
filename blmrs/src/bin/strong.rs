@@ -400,7 +400,10 @@ fn main() {
     let selfa_k = envf("SELFA_K", 1.0);
     let sel_urate = 1.0 - sel_udc;            // the §82 fixed EWMA rate
     // §86 (C) BLSELTAG: 8-bit checksum tag per vote cell, evict-on-mismatch (SELTAGW=0 reduces to OFF).
-    let blseltag = env::var("BLSELTAG").map(|s| s == "1").unwrap_or(false);
+    // DEFAULT ON since the §91 owner adoption (beats the no-tag default on every corpus measured,
+    // held-out enwik8 tail included: corpus_big +0.000461, full enwik8 +0.001213, tail +0.000374,
+    // repo code +0.000587, stdlib +0.000935; 8 MB of tags). BLSELTAG=0 recovers the untagged engine.
+    let blseltag = env::var("BLSELTAG").map(|s| s != "0").unwrap_or(true);
     let seltagw: u32 = envf("SELTAGW", 8.0) as u32;
     let seltagmask: u8 = if seltagw >= 8 { 0xFF } else { ((1u16 << seltagw) - 1) as u8 };
     // §86 (D) BLSELBIAS: give the three mixers a REAL bias input back under BLSEL. Default OFF.

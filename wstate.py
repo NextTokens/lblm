@@ -412,11 +412,16 @@ SEL_ARMS = ("sel", "selpos", "selorc4", "sellean",
             "selrs2", "selrs2fa",                                # §86 amendment 2026-09-16 (bootstrap floor)
             "selleanu", "selleanrb", "selleanfa", "selleanrbfa",  # §86 LEAN counterparts (2026-09-17)
             "selrbfaopt", "selrbfaexp", "selrbfaug", "selrbfaoe",  # §88 (v12): the lockout arms
-            "seliso")                                            # §90 (v15): Jev-inspired per-question isolation
+            "seliso",                                            # §90 (v15): Jev-inspired per-question isolation
+            "selhyb")                                            # §91 (v16): hybrid dial = shared prior + per-word residual
                                                                  # RETIRED per §90's pre-registered reverse-course rule
                                                                  # (I1 0.68-0.82 > 0.3, I3 -1.49; kept as the measured
                                                                  # extreme point of the readout-sharing spectrum and the
                                                                  # only arm ever to pass I2a+I2b -- 2 exposures to vote)
+#   selhyb : §91 -- dial_t = A[context] + B[(context, word)]: the shared prior A pools trust
+#            evidence across words (§81's strength), the per-word residual B isolates each
+#            word's update (§90's strength). A trains on the exact gradient (y-p)*sum_t f_t;
+#            each B_t on (y-p)*f_t. The measured spectrum's untried fourth point.
 # The arms with NO M=32 EMA state and NO bucket expert (use_state False; sel_rbase = NM).
 SEL_LEAN_ARMS = ("sellean", "selleanu", "selleanrb", "selleanfa", "selleanrbfa")
 #   sel     : usefulness + position bias + context-selected readout   (THE HEADLINE)
@@ -691,11 +696,14 @@ class Model:
             self.sel_Gr = [0.0] * SD               # per-byte dL/dr (mixer weights at predict time)
             self.sel_acc = []                      # per-T vote agreement accumulator (usefulness)
             self.at_n = 0; self.at_ks = []; self.at_a = []; self.at_T = []   # probe diagnostics
-            if arm == "seliso":
-                self.viso = {}                     # §90: per-(readout ctx, word) trust dials
+            if arm in ("seliso", "selhyb"):
+                self.viso = {}                     # §90/§91: per-(readout ctx, word) dials / residuals
                 self.visog = {}                    # ... their RMSProp state
                 self.sel_iso = []                  # per-bit cache: [(key, f_t)] of the served dials
                 self.sel_uw_bit = 0.0              # per-bit sum of |dial| used (usefulness weighting)
+            if arm == "selhyb":
+                self.vsh = {}                      # §91: the SHARED prior A[context]
+                self.vshg = {}                     # ... its RMSProp state
         self.htail = 0; self.cur = 0; self.phase = 0
         self.sbase = self.NM
         self.wh = FNV0                 # rolling FNV-1a over lowercased word bytes
@@ -929,7 +937,7 @@ class Model:
             cx = ((self.htail & 0xFF) << 10) | (self.phase << 7) | self.cur
             self.sel_cx = cx
             self.sel_wk = cx                       # §90: the shared context component of the iso keys
-            if self.arm == "seliso":
+            if self.arm in ("seliso", "selhyb"):
                 # §90 (Jev-inspired, labelled): PER-QUESTION ISOLATION -- each candidate's vote is read
                 # through its OWN trust dial keyed (readout context, word), summed AFTER the readout
                 # (no mixture first). One word's dial cannot move another's, so an unreliable new
@@ -941,13 +949,14 @@ class Model:
                 if self.sel_diag:
                     self.sel_pnv = squash(d)      # the same model WITHOUT any vote term
                     self.sel_dnv = d
+                a_cx = self.vsh.get(cx, 0.0) if self.arm == "selhyb" else 0.0   # §91 shared prior
                 iso = []
                 uw = 0.0
                 for t, ci in enumerate(self.sel_T):
                     wid_t = self.sel_pairs[t][0]
                     f_t = stretch(p1all[ci])
                     wk_t = (cx, wid_t)
-                    w_t = self.viso.get(wk_t, 0.0)
+                    w_t = a_cx + self.viso.get(wk_t, 0.0)      # §91: dial = shared + residual
                     d += w_t * f_t
                     uw += abs(w_t)
                     iso.append((wk_t, f_t))
@@ -1038,8 +1047,8 @@ class Model:
             # §81: the readout itself identifies the bytes where the vote matters -- accumulate
             # |vsw| to weight the usefulness update (dilutes the many bytes where the vote is
             # irrelevant, which otherwise reward merely-predictable words)
-            if self.arm == "seliso":
-                self.sel_uwacc += self.sel_uw_bit     # §90: the iso dials actually used this bit
+            if self.arm in ("seliso", "selhyb"):
+                self.sel_uwacc += self.sel_uw_bit     # §90/§91: the dials actually used this bit
             else:
                 self.sel_uwacc += abs(self.vsw.get(self.sel_wk, 0.0))   # §86: the readout cell actually used
         if self.arm in LEARNED_SLOT_ARMS:
@@ -1139,8 +1148,15 @@ class Model:
         if self.arm in SEL_ARMS and self.sel_pairs and learn:
             # §81: train the readout on the final error, then give every served candidate
             # FULL-WEIGHT counts (the §79b lesson: shared responsibility starves cells)
-            if self.arm == "seliso":
-                # §90: each dial trains ONLY on its own feature -- the isolation itself
+            if self.arm in ("seliso", "selhyb"):
+                # §90/§91: each per-word term trains ONLY on its own feature -- the isolation
+                if self.arm == "selhyb":
+                    # §91: the shared prior A trains on the exact pooled gradient
+                    gA = (y - p) * sum(f_t for _wk, f_t in self.sel_iso)
+                    gg = self.vshg.get(self.sel_wk, 0.0)
+                    gg = 0.999 * gg + 0.001 * gA * gA
+                    self.vshg[self.sel_wk] = gg
+                    self.vsh[self.sel_wk] = self.vsh.get(self.sel_wk, 0.0) + self.lr_vsw * gA / (math.sqrt(gg) + 1e-4)
                 for wk_t, f_t in self.sel_iso:
                     g2 = (y - p) * f_t
                     gg = self.visog.get(wk_t, 0.0)
