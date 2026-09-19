@@ -411,7 +411,12 @@ SEL_ARMS = ("sel", "selpos", "selorc4", "sellean",
             "selrb", "selrs", "selfa", "selrbfa", "selrsfa",     # §86 (v11): the §85 lever
             "selrs2", "selrs2fa",                                # §86 amendment 2026-09-16 (bootstrap floor)
             "selleanu", "selleanrb", "selleanfa", "selleanrbfa",  # §86 LEAN counterparts (2026-09-17)
-            "selrbfaopt", "selrbfaexp", "selrbfaug", "selrbfaoe")  # §88 (v12): the lockout arms
+            "selrbfaopt", "selrbfaexp", "selrbfaug", "selrbfaoe",  # §88 (v12): the lockout arms
+            "seliso")                                            # §90 (v15): Jev-inspired per-question isolation
+                                                                 # RETIRED per §90's pre-registered reverse-course rule
+                                                                 # (I1 0.68-0.82 > 0.3, I3 -1.49; kept as the measured
+                                                                 # extreme point of the readout-sharing spectrum and the
+                                                                 # only arm ever to pass I2a+I2b -- 2 exposures to vote)
 # The arms with NO M=32 EMA state and NO bucket expert (use_state False; sel_rbase = NM).
 SEL_LEAN_ARMS = ("sellean", "selleanu", "selleanrb", "selleanfa", "selleanrbfa")
 #   sel     : usefulness + position bias + context-selected readout   (THE HEADLINE)
@@ -686,6 +691,11 @@ class Model:
             self.sel_Gr = [0.0] * SD               # per-byte dL/dr (mixer weights at predict time)
             self.sel_acc = []                      # per-T vote agreement accumulator (usefulness)
             self.at_n = 0; self.at_ks = []; self.at_a = []; self.at_T = []   # probe diagnostics
+            if arm == "seliso":
+                self.viso = {}                     # §90: per-(readout ctx, word) trust dials
+                self.visog = {}                    # ... their RMSProp state
+                self.sel_iso = []                  # per-bit cache: [(key, f_t)] of the served dials
+                self.sel_uw_bit = 0.0              # per-bit sum of |dial| used (usefulness weighting)
         self.htail = 0; self.cur = 0; self.phase = 0
         self.sbase = self.NM
         self.wh = FNV0                 # rolling FNV-1a over lowercased word bytes
@@ -916,11 +926,39 @@ class Model:
                 p1s.append(p1all[ci]); keys.append(keysall[ci])
                 pm += self.sel_wT[t] * p1all[ci]
             self.sel_p1 = p1s; self.sel_keys = keys
+            cx = ((self.htail & 0xFF) << 10) | (self.phase << 7) | self.cur
+            self.sel_cx = cx
+            self.sel_wk = cx                       # §90: the shared context component of the iso keys
+            if self.arm == "seliso":
+                # §90 (Jev-inspired, labelled): PER-QUESTION ISOLATION -- each candidate's vote is read
+                # through its OWN trust dial keyed (readout context, word), summed AFTER the readout
+                # (no mixture first). One word's dial cannot move another's, so an unreliable new
+                # memory trains ITS dial down without touching a reliable old one's -- §85's measured
+                # interference channel (the shared vsw, phase-5 weight 0.06 vs 0.84) is cut by
+                # construction. The design mirrors Jev 1.13's "questions in parallel and isolation"
+                # (typesafe.ai, Sept 2026) -- an external, independent motivation for the per-word
+                # readout §85.3/§89.6 had already named as the untried lever.
+                if self.sel_diag:
+                    self.sel_pnv = squash(d)      # the same model WITHOUT any vote term
+                    self.sel_dnv = d
+                iso = []
+                uw = 0.0
+                for t, ci in enumerate(self.sel_T):
+                    wid_t = self.sel_pairs[t][0]
+                    f_t = stretch(p1all[ci])
+                    wk_t = (cx, wid_t)
+                    w_t = self.viso.get(wk_t, 0.0)
+                    d += w_t * f_t
+                    uw += abs(w_t)
+                    iso.append((wk_t, f_t))
+                self.sel_iso = iso
+                self.sel_f = 0.0                 # no shared feature; uwacc uses the iso dials
+                self.sel_uw_bit = uw
+                return squash(d), sts
             f = stretch(pm)
             if self._sel_rs:
                 f = f * self.sel_rsc              # §86 selrs: reliability-scaled vote feature
-            cx = ((self.htail & 0xFF) << 10) | (self.phase << 7) | self.cur
-            self.sel_f = f; self.sel_cx = cx
+            self.sel_f = f
             rb = self.sel_rb
             wk = cx if rb is None else ((cx << 2) | rb)     # §86 selrb: (cx, reliability bucket)
             self.sel_wk = wk
@@ -1000,7 +1038,10 @@ class Model:
             # §81: the readout itself identifies the bytes where the vote matters -- accumulate
             # |vsw| to weight the usefulness update (dilutes the many bytes where the vote is
             # irrelevant, which otherwise reward merely-predictable words)
-            self.sel_uwacc += abs(self.vsw.get(self.sel_wk, 0.0))   # §86: the readout cell actually used
+            if self.arm == "seliso":
+                self.sel_uwacc += self.sel_uw_bit     # §90: the iso dials actually used this bit
+            else:
+                self.sel_uwacc += abs(self.vsw.get(self.sel_wk, 0.0))   # §86: the readout cell actually used
         if self.arm in LEARNED_SLOT_ARMS:
             # exact credit to slot-embedding dims: mixer weight at predict time, per bit
             g = p - y
@@ -1096,14 +1137,23 @@ class Model:
                     else:
                         vt[jy] = cy
         if self.arm in SEL_ARMS and self.sel_pairs and learn:
-            # §81: train the CONTEXT-SELECTED vote weight on the final error, then give every
-            # served candidate FULL-WEIGHT counts (the §79b lesson: shared responsibility starves cells)
-            g2 = (y - p) * self.sel_f
-            cx = self.sel_wk                      # §86: cx for sel, (cx, rbucket) for the selrb family
-            gg = self.vswg.get(cx, 0.0)
-            gg = 0.999 * gg + 0.001 * g2 * g2
-            self.vswg[cx] = gg
-            self.vsw[cx] = self.vsw.get(cx, 0.0) + self.lr_vsw * g2 / (math.sqrt(gg) + 1e-4)
+            # §81: train the readout on the final error, then give every served candidate
+            # FULL-WEIGHT counts (the §79b lesson: shared responsibility starves cells)
+            if self.arm == "seliso":
+                # §90: each dial trains ONLY on its own feature -- the isolation itself
+                for wk_t, f_t in self.sel_iso:
+                    g2 = (y - p) * f_t
+                    gg = self.visog.get(wk_t, 0.0)
+                    gg = 0.999 * gg + 0.001 * g2 * g2
+                    self.visog[wk_t] = gg
+                    self.viso[wk_t] = self.viso.get(wk_t, 0.0) + self.lr_vsw * g2 / (math.sqrt(gg) + 1e-4)
+            else:
+                g2 = (y - p) * self.sel_f
+                cx = self.sel_wk                      # §86: cx for sel, (cx, rbucket) for the selrb family
+                gg = self.vswg.get(cx, 0.0)
+                gg = 0.999 * gg + 0.001 * g2 * g2
+                self.vswg[cx] = gg
+                self.vsw[cx] = self.vsw.get(cx, 0.0) + self.lr_vsw * g2 / (math.sqrt(gg) + 1e-4)
             vt = self.svt
             for t_, ix in enumerate(self.sel_keysall):
                 j0 = 2 * ix; jy = j0 + y

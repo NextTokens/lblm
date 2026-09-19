@@ -4684,6 +4684,49 @@ bucketed fix the worst arm on real text, so it must be per-word or per-cell.
 
 ---
 
+## 90. The Jev isolation import, tested and retired per its own pre-registered rule (`wstate.py` v15 `seliso`, `_fewshot_probe.py --grid90`)
+
+**Origin, labelled:** the owner asked whether the Jev 1.13 "System One Model" (TypeSafe AI, Sept 2026 —
+questions evaluated "in parallel and in isolation, no context rot") carries importable knowledge. The one
+testable import mapped exactly onto this project's standing untried lever: **per-question isolation =
+a per-word readout** (§85.3 named it; §86's reliability-**bucket** version was the middle of the spectrum;
+§89.6/§89A left "per-word or per-cell" open). Implemented as `seliso`: the §81 selector unchanged except
+each served candidate's vote is read through its OWN trust dial keyed (readout context, word), summed
+after the readout; each dial trains only on its own feature — an unreliable word cannot move a reliable
+word's dial by construction. Criteria = §86's I1/I2a/I2b/I3, plus a REVERSE-COURSE rule pre-registered at
+the owner's instruction: fail I1 or I3 → retire the import as no-value, no real-text run.
+
+**Result (G=24, seeds 7/8, §86 protocol; `_90_arms.txt`, grid 377 s):**
+
+| arm | I1 interference (k-matched) | I2a few-shot vote | I2b speed | I3 no-regression |
+|---|---|---|---|---|
+| sel (reference) | FAIL (1.65/1.67) | FAIL (+0.88) | FAIL (never) | PASS (self) |
+| seliso | FAIL (0.68/0.82) | **PASS (+2.29)** | **PASS (2 exposures)** | FAIL (−1.49) |
+
+**Reverse-course executed as registered: the import is retired — no real-text run.** The measured
+mechanism, recorded because it is the finding: **isolation trades interference for evidence
+fragmentation.** The shared dial pools trust across every word (506 cells, max |w| 30.6, saturation-
+like); per-word dials fragment it (16,953 cells, max |w| 4.5). At test, a known cue's dial IS trained
+(mean +0.77 at the deciding context, 30/30 nonzero) yet contributes only +0.049 bits where the shared
+readout contributes +1.256 — and the base model's own competence at well-trained outcomes leaves little
+for a weak dial to save. Interference halves but does not clear the bar. One genuine first survives the
+retirement: **seliso is the first arm in the project's history to pass I2a+I2b — a brand-new fact is
+VOTED within 2 exposures** (every §86 fast-trust arm and every §88 lockout arm failed this). The
+spectrum now has all three points measured — shared (interferes, strong), bucketed (§86: probe-decisive,
+real-text-worst), per-word (starves known, trusts new instantly) — and the evidence names the untried
+hybrid if anyone reopens it: a per-word dial as a RESIDUAL over a shared prior (pool evidence AND isolate
+updates). Not built here: outside this registration.
+
+**What the external model contributed:** not a mechanism we lacked — a design opinion that happened to
+land on our own named-but-untried lever, and the discipline of testing it to a pre-registered bar with a
+reversal rule. The comparison also sharpened the positioning: Jev ships frozen decisions with calibrated
+confidence and no disclosed internals; this project ships an online learner with every internal open and
+every claim reproduced from source. Both treat calibrated uncertainty as the product; only one adapts
+after deployment.
+
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").
