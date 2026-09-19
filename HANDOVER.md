@@ -1,5 +1,15 @@
 # HANDOVER — the LBLM intelligence track, post-§89
 
+> **§91 update (2026-09-18) — the readout story closed; the tag adopted.** The hybrid readout
+> (`selhyb`: shared prior + per-word residual, the spectrum's fourth and last point) fails I1 and I3
+> under its own pre-registered reverse-course rule: it inherits the per-word starvation, and the
+> §85 lever's readout component is **unsolved at this data scale**. The track's open limits are now
+> scope (the fact instrument's memory still wipes at '.'), saturation (104.8M keys vs 4.19M cells,
+> the §86.8 regime account), and scale (GPU/batch-over-streams, never started). In the engine,
+> `BLSELTAG=1` is adopted as the default under the §80 standing directive (beats untagged on every
+> corpus incl. held-out; full enwik8 0.194567; `BLSELTAG=0` recovers bit-identically; new 300 KB ref
+> 0.230742). Details: ledger §91.
+>
 > **§89 update (2026-09-17) — the cheap fix, and a mechanism claim I got wrong. Read ledger §89, then §87.**
 >
 > **What holds.** An 8-bit tag per vote cell with evict-on-mismatch (`WSELTAG=1`, v14, default OFF and

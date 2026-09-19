@@ -4757,7 +4757,7 @@ iterations on this probe. What stands: one-exposure storage (§85), 2-exposure t
 
 The decision set, complete: tagged vote cells beat the untagged default on **every corpus measured,
 held-out included** — corpus_big 0.215120 → 0.214659 (+0.000461, run today at HEAD), full enwik8
-0.195780 → **0.194567** (+0.001213, §86; §91 addendum re-verifies at HEAD), enwik8 last-30MB +0.000374,
+0.195780 → **0.195525 at HEAD** (+0.000255 controlled; §86 recorded 0.194567 — see the §91B addendum: not reproduced, withdrawn), enwik8 last-30MB +0.000374 (§86),
 repo code +0.000587, stdlib +0.000935 (§86) — for 8 MB of tags. `SELTOPM` is inert at the adopted
 `NSELSLOTS=2` (4/8/16/32 all 0.214659 — top-m ≥ 2 saturates with two candidates), so §89A's instrument
 ladder does not generalise to the engine as-is. `BLSELTAG=0` recovers the untagged engine
@@ -4765,6 +4765,29 @@ bit-identically (0.230863 @300 KB); new 300 KB reference **0.230742**. The §87/
 cost of tagging remains real and the §86.8 regime account stays open — recorded, not resolved; the
 engine evidence was uniform, which is what the §80 precedent requires.
 
+
+### 91B addendum — the HEAD headline, and §86's 0.194567 not reproduced
+
+Full enwik8 at HEAD with the new defaults (BLSELTAG=1, b23 tables): **0.195525 bits/bit (19.55 MB)** —
+the tag's controlled contribution at HEAD is +0.000255 over the untagged 0.195780, not §86's recorded
++0.001213. §86's 0.194567 is **not reproduced by the record as written** and is withdrawn as the current
+engine's number. Reconciliation runs at HEAD (corpus_big, tag@b23 = 0.214659): `BLSELBIAS=1` moves it
+−0.000008 (the ~1e-5 §86 reported — not the gap); `SELVBITS=24 SELUBITS=24` moves it −0.000127, and on
+enwik8-30MB the same step moves −0.000180 (0.201987 → 0.201807) — the table-size effect GROWS with
+scale, consistent with saturation (§87's 104.8M keys) being the driver and making it plausible that
+§86's headline ran with larger tables than its "8 MB" text states, but this is not reconcilable from the
+record. The controlled set at HEAD, all default-configuration:
+
+| run | corpus_big 11 MB | enwik8 30 MB | full enwik8 100 MB |
+|---|---|---|---|
+| untagged (§84 default) | 0.215120 | 0.202601 | 0.195780 |
+| **tagged b23 (§91 default)** | **0.214659** | **0.201987** | **0.195525** |
+| tagged b24 (candidate) | 0.214532 | 0.201807 | not run |
+
+The tag is adopted on this table (uniform gains incl. the 30MB slice, +0.00046…+0.00061); b24 is a
+further candidate left unadopted pending the §80 held-out ritual. Lesson recorded: a headline number
+without its full flag line is not reproducible — every future headline run logs `flags:` (printed since
+§84) into the ledger verbatim.
 
 ---
 
