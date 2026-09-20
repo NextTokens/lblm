@@ -413,7 +413,8 @@ SEL_ARMS = ("sel", "selpos", "selorc4", "sellean",
             "selleanu", "selleanrb", "selleanfa", "selleanrbfa",  # §86 LEAN counterparts (2026-09-17)
             "selrbfaopt", "selrbfaexp", "selrbfaug", "selrbfaoe",  # §88 (v12): the lockout arms
             "seliso",                                            # §90 (v15): Jev-inspired per-question isolation
-            "selhyb")                                            # §91 (v16): hybrid dial = shared prior + per-word residual
+            "selhyb",                                            # §91 (v16): hybrid dial = shared prior + per-word residual
+            "selmix", "selisn")                                  # §92B (v17): the missing 2x2 cells (see below)
                                                                  # RETIRED per §90's pre-registered reverse-course rule
                                                                  # (I1 0.68-0.82 > 0.3, I3 -1.49; kept as the measured
                                                                  # extreme point of the readout-sharing spectrum and the
@@ -423,6 +424,24 @@ SEL_ARMS = ("sel", "selpos", "selorc4", "sellean",
 #            word's update (§90's strength). A trains on the exact gradient (y-p)*sum_t f_t;
 #            each B_t on (y-p)*f_t. The measured spectrum's untried fourth point.
 # The arms with NO M=32 EMA state and NO bucket expert (use_state False; sel_rbase = NM).
+# §92B (v17) -- THE MISSING 2 x 2 CELLS. §91A closed the readout story on a comparison that moved
+# FOUR variables at once (mixing space, normalisation, gate weighting, dial keying); these two arms
+# separate them. Registration: prereg/92B_selmix.md, written before either arm was run.
+#   selmix : EXACTLY sel, except f = sum_t wT[t]*stretch(p1_t) instead of stretch(sum_t wT[t]*p1_t).
+#            Same gate, same candidates, same counts, same single shared vsw[cx] dial and gradient.
+#            Isolates the MIXING SPACE alone. Mixing in probability space and transforming after
+#            costs ~2/3 of a confident cell's evidence (measured: |T|=4, one cell at (100,0),
+#            shipped f -0.509 vs logit-space -1.554) -- §89A correction #2 saw this from the other
+#            side ("the same empty cell costs -1.43 at |T|=4 and -0.32 at |T|=32") without naming it.
+#   selisn : selmix with the dial keyed (cx, word) per served word -- §90's isolation WITHOUT the
+#            normalisation and gate-weight drop that seliso also carried. Isolates the KEYING alone.
+#            sel -> selmix isolates mixing space; selmix -> selisn isolates keying; selisn -> seliso
+#            isolates the unnormalised sum. §90/§91's "per-word dials starve (max|w| 4.5 vs 30.6)"
+#            is not apples-to-apples until this arm runs: with |T| UNNORMALISED dials summing and
+#            the gate weights gone, each dial needs ~1/|T| the magnitude for the same contribution.
+SEL_ISO_ARMS = ("seliso", "selhyb", "selisn")   # dial applied PER SERVED WORD, after a per-cell stretch
+SEL_MIX_ARMS = ("selmix",)                      # shared dial, gate weights kept, per-cell stretch
+
 SEL_LEAN_ARMS = ("sellean", "selleanu", "selleanrb", "selleanfa", "selleanrbfa")
 #   sel     : usefulness + position bias + context-selected readout   (THE HEADLINE)
 #   selpos  : position bias only, same readout                        -> isolates the readout fix
@@ -447,7 +466,10 @@ SEL_UDC = 0.995     # usefulness EWMA decay (timescale ~200 bytes)
 SEL_UCLIP = 4.0     # usefulness clamp
 SEL_TOPM = int(os.environ.get("WSELTOPM", "4"))       # §87: env knob, default = the §81 literal
                     # vote-set size (matches WTOPM=4 of the §77 arms)
-SVBITS = int(os.environ.get("WVBITS2", "22"))      # §81 vote-table bits (flat, bounded; real corpora)
+SVBITS = int(os.environ.get("WVBITS2", "22"))
+WSELSENT = int(os.environ.get("WSELSENT", "1"))   # §92: 1 = §81 sentence scope (bit-identical);
+                                                  # 0 = whole-stream (the engine's §83 winner);
+                                                  # k>1 = clear every k-th '.' (scope ladder)      # §81 vote-table bits (flat, bounded; real corpora)
 SELTAG = os.environ.get("WSELTAG", "0") == "1"     # §89B: 8-bit tag per vote cell, evict on mismatch
 WNS = os.environ.get("WNS", "0") == "1"            # §81 corpus phase: PAQ nonstationary rule on the
                                                    # order tables (§78.2: cumulative counters are a weak rail)
@@ -666,6 +688,9 @@ class Model:
             # §86: per-arm switches (precomputed: they are read on every bit)
             self._sel_rb = arm in SEL_RB_ARMS
             self._sel_rs = arm in SEL_RS_ARMS
+            self._sel_iso = arm in SEL_ISO_ARMS    # §90/§91/§92B: per-word dial after a per-cell stretch
+            self._sel_isn = arm == "selisn"        # §92B: ... with the gate weights RETAINED
+            self._sel_mix = arm in SEL_MIX_ARMS    # §92B: shared dial, per-cell stretch before mixing
             self._sel_fa = arm in SEL_FA_ARMS
             # §88 (v12): for every pre-existing arm these are exactly the literals they replace
             # (_sel_u0 0.0, _sel_ugt 0.02, _sel_exp False), so those arms stay bit-identical.
@@ -696,7 +721,7 @@ class Model:
             self.sel_Gr = [0.0] * SD               # per-byte dL/dr (mixer weights at predict time)
             self.sel_acc = []                      # per-T vote agreement accumulator (usefulness)
             self.at_n = 0; self.at_ks = []; self.at_a = []; self.at_T = []   # probe diagnostics
-            if arm in ("seliso", "selhyb"):
+            if arm in SEL_ISO_ARMS:
                 self.viso = {}                     # §90/§91: per-(readout ctx, word) dials / residuals
                 self.visog = {}                    # ... their RMSProp state
                 self.sel_iso = []                  # per-bit cache: [(key, f_t)] of the served dials
@@ -937,7 +962,7 @@ class Model:
             cx = ((self.htail & 0xFF) << 10) | (self.phase << 7) | self.cur
             self.sel_cx = cx
             self.sel_wk = cx                       # §90: the shared context component of the iso keys
-            if self.arm in ("seliso", "selhyb"):
+            if self._sel_iso:
                 # §90 (Jev-inspired, labelled): PER-QUESTION ISOLATION -- each candidate's vote is read
                 # through its OWN trust dial keyed (readout context, word), summed AFTER the readout
                 # (no mixture first). One word's dial cannot move another's, so an unreliable new
@@ -955,6 +980,8 @@ class Model:
                 for t, ci in enumerate(self.sel_T):
                     wid_t = self.sel_pairs[t][0]
                     f_t = stretch(p1all[ci])
+                    if self._sel_isn:
+                        f_t *= self.sel_wT[t]      # §92B: gate weights retained, sum_t wT = 1
                     wk_t = (cx, wid_t)
                     w_t = a_cx + self.viso.get(wk_t, 0.0)      # §91: dial = shared + residual
                     d += w_t * f_t
@@ -964,7 +991,13 @@ class Model:
                 self.sel_f = 0.0                 # no shared feature; uwacc uses the iso dials
                 self.sel_uw_bit = uw
                 return squash(d), sts
-            f = stretch(pm)
+            if self._sel_mix:
+                # §92B selmix: transform each cell BEFORE mixing. The ONLY difference from sel.
+                f = 0.0
+                for t, ci in enumerate(self.sel_T):
+                    f += self.sel_wT[t] * stretch(p1all[ci])
+            else:
+                f = stretch(pm)
             if self._sel_rs:
                 f = f * self.sel_rsc              # §86 selrs: reliability-scaled vote feature
             self.sel_f = f
@@ -1148,8 +1181,10 @@ class Model:
         if self.arm in SEL_ARMS and self.sel_pairs and learn:
             # §81: train the readout on the final error, then give every served candidate
             # FULL-WEIGHT counts (the §79b lesson: shared responsibility starves cells)
-            if self.arm in ("seliso", "selhyb"):
+            if self._sel_iso:
                 # §90/§91: each per-word term trains ONLY on its own feature -- the isolation
+                # §92B selisn: f_t already carries wT[t], so g2 = (y-p)*wT[t]*stretch(p1_t) is
+                # the exact gradient of that dial's own term -- no separate handling needed.
                 if self.arm == "selhyb":
                     # §91: the shared prior A trains on the exact pooled gradient
                     gA = (y - p) * sum(f_t for _wk, f_t in self.sel_iso)
@@ -1235,11 +1270,16 @@ class Model:
                 self.sel_vc_acc = 0.0
             # §81: same timing contract (the byte just SERVED, slots still pre-LRU)
             self._sel_apply(learn)
-            if b == 46:                      # '.' ends the sentence: candidates are scoped to
-                self.slots = [0] * S         # the CURRENT sentence (a 32-deep LRU otherwise lets
-                                             # the previous sentence's cue pollute its own vote
-                                             # cells with foreign outcomes -- measured 183 updates
-                                             # for 37 own sentences before this fix)
+            if b == 46 and WSELSENT >= 1:    # §81 sentence scoping / §92 the scope knob:
+                # WSELSENT=1 clears every '.' (the §81 fix: a 32-deep LRU otherwise lets the
+                # previous sentence's cue pollute its own vote cells with foreign outcomes --
+                # measured 183 updates for 37 own sentences before this fix). WSELSENT=0 never
+                # clears (the engine's §83 whole-stream winner; §87 measured 2,220/11,751 fact
+                # events as structural zeros of this line). k>1: clear every k-th '.'.
+                self._sent_ctr = getattr(self, "_sent_ctr", 0) + 1
+                if WSELSENT == 1 or self._sent_ctr >= WSELSENT:
+                    self._sent_ctr = 0
+                    self.slots = [0] * S
         swid = wid if SLOTMODE == "prefix" else self.done
         if (self.arm in SLOT_ARMS or self.arm in W78_ARMS) and swid:
             sl = self.slots

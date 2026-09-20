@@ -4791,6 +4791,200 @@ without its full flag line is not reproducible — every future headline run log
 
 ---
 
+## 92. Two registered measurements: the calibration claim was never measured, and §90/§91 attributed their own result to the wrong variable
+
+Registrations: `prereg/92A_calibration.md` and `prereg/92B_selmix.md`, both in the repository this
+time. §87–§91 cite pre-registrations under `scratchpad/` and `rt89/` that are **absent from a clone** —
+they lived in a session temp directory. New tracked deliverable: `calprobe.py`. Both results were
+red-teamed before a word of this section was written, and the red-team changed both.
+
+### 92A The machine's odds run about 8 % too strong, and nothing here had ever checked
+
+**The claim under test.** Ledger line 1352 — "*Confidence is calibrated: accuracy@commit rises
+monotonically (0.57 → 0.95)*" — and `poc.py:244`, which repeats it in a user-facing dashboard. Both
+cite a **selective-prediction** curve. That curve is monotone for any model whose confidence
+*ordering* is informative, including one that is uniformly 2× overconfident. It is not calibration.
+At the time of registration `grep -rniE "ECE|brier|reliability curve|calibration curve"` over every
+`.py` and `.md` returned **zero hits**: the word had never been measured.
+
+**Method.** Prequential per-bit calibration on the adopted rail (`selleanu`, `WNS=1`, word mode,
+`WSLOTS=32`, `WVBITS2=22`). `p` is recovered from the cost `step()` already returns, so `wstate.py`
+is untouched and no bit-identity risk is taken. Four binnings pre-committed (uniform/quantile ×
+10/20). The noise floor is **simulated from the machine's own predictions**, never looked up by
+sample size — the method this project adopted after making exactly that error in its 2026-09-18
+Jev analysis. Self-tests: `p` recovery exact to 1.1e-16, bpb reconstruction to 1.3e-15, analytic
+floor vs Monte Carlo to 0.07 % at 2000 trials.
+
+| train / held-out | bits | bpb | ECE | floor | Platt slope |
+|---|---|---|---|---|---|
+| 400 KB / 200 KB | 1,131,528 | 2.142899 | 0.00695 | 0.00038 | 0.921 |
+| **2700 KB / 400 KB** | 1,363,672 | **2.278784** | **0.01026** | 0.00035 | **0.885** |
+
+`2.278784` matches §86.8's recorded `2.2788` for wt103 2700 KB at 2^22, so this measures the same
+machine every corpus number describes.
+
+**In plain words.** On the held-out text it scores, when the machine says 83 % it is right 80 % of
+the time, and when it says 17 % the bit comes up 21 % of the time. The odds run about 8 % too strong
+at 400 KB and about 11 % at 2700 KB. The error is **small** — about 0.006 of 2.14 bits per byte,
+under a third of one percent — and unmistakably **real**: far outside what chance produces over a
+million bits, at every one of the four pre-committed binnings, in all eight bit positions
+separately, and unchanged when every saturated bit is dropped. Three-quarters of it sits in the two
+middle confidence bands, which is exactly where a decision threshold operates. It is one scalar's
+worth of over-sharpness: nonparametric recalibration does **worse** out of fold.
+
+**What still stands, and it is a real property:** the machine **ranks its own bits correctly** —
+92 % accurate at full coverage rising to 99.8 % at the tightest threshold. That is what §33 and
+line 1352 actually demonstrated. It was never evidence of calibration, and the inference from one to
+the other was never valid.
+
+**The red-team overturned three of my own sentences before this was written.**
+
+1. "*ECE is roughly flat with 10× more training*" — **withdrawn.** The 40 KB and 400 KB runs differ in
+   training size, evaluation extent **and** retained-byte fraction simultaneously. At matched
+   evaluation extent it is 0.00879 vs 0.00625, a 41 % *increase*. The by-fifths split within one run
+   (0.00810 / 0.00669 / 0.00579 / 0.00647 / 0.00750, while bpb improves 20 %) is different and better
+   evidence that this is not a warm-up transient, and is what the claim should have cited.
+2. "*the selective-prediction curve reproduces ledger 1352*" — **withdrawn.** 1352 is a **byte**-level
+   greedy rollout with confidence = the product of per-bit max-probs (0.565 → 0.947). `selective_curve()`
+   is a **bit**-level analogue (0.9161 → 0.9984). Different population, different definition. The
+   logical point needs no such reproduction and stands without it.
+3. **`r = ECE / floor` is retired as a headline statistic.** It is a power statistic, not an effect
+   size: on identical data it runs 18.36 / 14.77 / 14.51 / 10.26 across the pre-committed binnings and
+   4.63 at uniform-100, and it grows as √N under the pure no-effect null — the red-team recovered the
+   whole "5.33 → 18.36" trend by subsampling the 400 KB capture alone. It keeps one job: showing the
+   effect is not noise. Every magnitude uses ECE, the Platt slope, or the plain odds ratio.
+
+**One confound is open and the scope clause stays until it closes.** `clean_mask_det` chooses which
+bytes are scored by looking at the text being scored, and the retained fraction falls 69.1 % → 41.6 %
+across the two scale points — so "more training" and "more aggressive outcome-dependent selection"
+move together, and selection alone predicts the observed direction. The control (`capture(nomask=True)`
+plus the ECE of the masked-**out** bytes) is registered in Amendment 1 with its branches fixed, and
+was still running when this was written. **Until it lands, no scale sentence is licensed in either
+direction** — not "flat", not "training makes it worse" — and every figure above carries "on the
+held-out text it scores".
+
+**Two defects found by the red-team, both verified here, both real.**
+
+* **`poc.py:peek()` advanced `htail` one bit at a time.** `wstate.py:1435` advances it one **byte** at a
+  time inside `_byte_end`, and `_octx` reads it frozen across all eight phases. The speculative beam
+  therefore corrupted the order contexts on bits 1–7 of every candidate byte. With `htail` frozen,
+  `peek` reproduces `step()`'s own cost exactly (0.177628 bits, P = 0.884156); as shipped it returned
+  3.080780 bits, **P = 0.118193** — wrong by 7.5× on that byte. `decide.py:34-37` is this project's own
+  correct implementation of the same rollout. **Fixed.** `calprobe.capture_bytes()` inherited the bug
+  verbatim and is fixed with it; a new self-test S4 requires the speculative path to equal `step()`'s
+  cost to ~1e-12, which is precisely the check S1–S3 did not perform.
+* **`poc.py` displayed the geometric mean, not the probability.** `conf = 2 ** (sum log2 p / 8)` is
+  `P(byte)**(1/8)`. Thresholded at τ = 0.90 that commits whenever the true byte probability exceeds
+  `0.9**8 = 0.4305`; a 50/50 byte displayed as 0.917 and committed. Against §33's own table the shipped
+  gate was committing at roughly 60–78 % byte accuracy while showing a number at or above 0.90.
+  **Fixed** — and the beam's own `lp` already held the exact answer, so the re-walk it used was dead
+  recomputation.
+
+**Not fixed, recorded as an engine defect:** `genmem.py:35-38` returns `1e-6` for `t < -30` while the
+logistic at `-30` is `9.358e-14`, so `squash` jumps seven orders of magnitude at the boundary and is
+**non-monotone** there — a more negative logit returns a *higher* `P(bit=1)`. The capture's minimum
+`p` is `9.581e-14` (`t = -29.976`): the machine runs to the cliff without crossing it. §92A's numbers
+are unaffected. The fix is to clip `t`, not the output; it changes coded output and belongs under the
+§80 ritual.
+
+**Two findings the red-team produced that are not claim corrections, each needing its own
+registration rather than a sentence here.** (1) A single global temperature fitted out of fold
+recovers **+0.000690** bits/bit (fit first half, apply to second) and **+0.000843** reversed — the size
+of the wins §86 and §91B adopted (+0.000255 / +0.000461 / +0.000935). That is the plain content of
+"overconfident": the mixer's logits are about 8.6 % too large, uniformly. Caveat: Python instrument,
+off-ladder size, `T` fitted offline on held-out data, so it is an upper bound on what an online scalar
+would recover. (2) **The low-surprise tail is off by far more than the headline, and ECE is
+structurally blind to it**: at `p < 1e-4` the model states 3.41 events and 23 occur (6.75×) at 400 KB,
+and states 3.23 and 45 occur (13.9×) at 2700 KB, while the whole sub-1e-5 region contributes 0.04 % of
+the ECE mass. **That tail is exactly the regime a novelty monitor runs in**, so §92A is measured in the
+units least informative for the use case this project's own notes name as the real one. Of the two,
+this is the more important.
+
+**What §92A does not license.** Anything about a window-level anomaly score. Per-bit honesty does not
+make a surprisal total over a window calibrated for a decision, and no null distribution over windows
+exists anywhere in this project. The registration said so in advance and the red-team confirmed the
+firewall holds mechanically: `poc.py`'s alarm compares realised bits/char against its own baseline and
+never uses `p` as a probability.
+
+### 92B §90 and §91 changed four variables and named the wrong one
+
+§91A closed the readout story: *"the spectrum is now fully measured … the §85 lever's readout component
+is unsolved at this data scale … no further readout iterations on this probe."* It attributed that to
+**dial keying** (shared → per-word). Reading `wstate.py`, `seliso`/`selhyb` differ from `sel` in **four**
+ways at once:
+
+| | `sel` (shipped) | `seliso` / `selhyb` |
+|---|---|---|
+| mixing space | probability, `stretch(Σ wT·p1)` | logit, `Σ w·stretch(p1)` |
+| normalisation | `Σ wT = 1` (`:1510`) | unnormalised sum over \|T\| |
+| gate weighting | `wT[t]` weights each vote | **dropped — `wT` unused on that path** |
+| dial keying | shared `vsw[cx]` | per-word `a_cx + viso[(cx, wid)]` |
+
+This is the defect §89A was corrected for in its own words: *"asserted from a one-armed experiment and
+is withdrawn in favour of the 2 × 2."* §92B adds the two missing cells — `selmix` (mixing space alone,
+shared dial, gate weights kept) and `selisn` (keying alone, normalisation held) — so the chain
+`sel → selmix → selisn → seliso` isolates one variable per step. **Gate: all five pre-existing arms
+verified bit-identical** before and after the v17 patch (`selleanu` 2.297564136, `sel` 2.304067917,
+`sellean` 2.299835562, `seliso` 2.767594046, `selhyb` 2.840129556), as the registration requires.
+
+| arm (G=24, seeds 7/8) | I1 interference | I2a | I2b exposures | I3 | corpus bits/bit |
+|---|---|---|---|---|---|
+| `sel` (shipped) | FAIL 1.647 / 1.672 | FAIL +0.877 | never | reference | 2.304068 |
+| **`selmix`** (mixing only) | FAIL **0.523 / 0.441** | **PASS +2.325** | **PASS [0, 0]** | FAIL −1.464 | **2.308247** |
+| **`selisn`** (+ keying) | FAIL **0.340 / 0.178** | PASS +1.548 | PASS [4, 6] | FAIL −1.445 | 2.357055 |
+| `seliso` (§90) | FAIL 0.737 / 0.707 | PASS +2.293 | PASS [2, 2] | FAIL −1.491 | 2.767594 |
+| `selhyb` (§91) | FAIL 0.990 / 0.740 | PASS +2.098 | FAIL [1, 15] | FAIL −1.542 | 2.840130 |
+
+**§90's mechanism sentence is refuted.** §90 credited 2-exposure trust to *per-question isolation* —
+"an unreliable word cannot move a reliable word's dial **by construction**" — and called `seliso` "the
+first arm in the project's history to pass I2a+I2b". `selmix` has **no isolation whatever**: one shared
+`vsw[cx]` dial, exactly as shipped. It votes at **zero exposures**, better than `seliso`'s two. The fast
+trust came from the **mixing space**, not from isolating the dials.
+
+**§90/§91's "per-word dials starve" is confounded, and the ordering reverses.** `selisn` — per-word
+dials with the normalisation and gate weights **held** — reaches I1 **0.340 / 0.178**, twice to four
+times better than `seliso` (0.737 / 0.707) and `selhyb` (0.990 / 0.740), and its seed-8 value **passes**
+the 0.3 bar. The two arms §90 and §91 built and generalised from are the **worst** of the logit-mixing
+family. The magnitude comparison that carried the starvation story (per-word `max|w|` 4.5 against the
+shared readout's 30.6) was never apples-to-apples: with \|T\| unnormalised dials summing and the gate
+weights gone, each dial needs roughly `1/|T|` the magnitude for the same contribution.
+
+**On corpus text the decomposition is stark** (120 KB, same build, `sel → seliso` total +0.463526):
+
+| step | Δ bits/bit | share |
+|---|---|---|
+| mixing space alone | +0.004179 | **0.9 %** |
+| dial keying alone | +0.048808 | 10.5 % |
+| unnormalised sum + dropped gate weights | **+0.410539** | **88.6 %** |
+
+Nearly nine-tenths of the corpus damage in §90/§91's arms comes from the variable neither section named.
+
+**And the regression they blamed on per-word dials is the mixing space too.** Every logit-mixing arm
+collapses POOL8 known-cue gain from ≈ +1.45 to ≈ 0 and fails I3 at −1.45 to −1.54 — **including
+`selmix`, which has no per-word dial anywhere**. So both halves of §90's reading, the I2 gain and the
+I3 regression, reproduce with a single shared dial and one variable changed.
+
+**Registered branches, and which fired.** Not the first ("`selmix` passes I1 or I3") — it does not; not
+the second ("`selmix` ≈ `sel`") — it is not, on any of the four. The **third** fires: *materially better
+than `sel`, still failing every criterion → a real but insufficient effect; the criteria are not moved
+to meet it; no adoption and no real-text run.* The **fourth** fires: *`selisn` materially different from
+`seliso` → the starvation mechanism is confounded and both sections are corrected.*
+
+**So §91A's conclusion survives and its attribution does not.** No arm passes the bar, and the readout
+component of the §85 lever is still unsolved at this data scale — that much stands, and `selmix`'s
+2.308247 against `sel`'s 2.304068 shows the mixing-space fix is nearly free on corpus text while
+buying two-thirds of the interference reduction on the probe. What must be struck is the attribution:
+§90's isolation mechanism, §91's starvation mechanism, and §91A's "fully measured spectrum" all rest on a
+four-variable comparison. The spectrum was never the axis being varied.
+
+**Method lesson, the sixth of its kind.** §89A was corrected for reading a one-armed experiment as a
+mechanism. §90 and §91 then did it twice more, in the same file, three sections later — and the
+registration that caught it was written by reading the code rather than the ledger. The 2 × 2 is not a
+statistical nicety here; it is the difference between "per-word readouts starve" and "we forgot to
+normalise".
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").
