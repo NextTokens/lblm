@@ -1,5 +1,18 @@
 # HANDOVER — the LBLM intelligence track, post-§89
 
+> **§93–§94 update (2026-09-19) — the scope thread, opened and mapped.** §92 (committed from a
+> parallel session) measured calibration for the first time (odds run 8–11 % too strong; ECE
+> 0.007–0.010 vs floor 0.0004) and refuted §90/§91's mechanism story via the missing 2×2 (the
+> fast trust was the mixing space, not isolation; 88.6 % of the damage was an unnormalized sum).
+> §93 then proved the instrument's sentence wipe a real, tension-free fact-recall defect
+> (`WSELSENT=0`: fact evidence +0.072 bits [+0.052, +0.094], compression ALSO improves) — but
+> system-level only: the cue's own cell dirties and the gate serves it half as often. §94's
+> ladder passed both named levers: full de-collision (b28, +0.033) and full reach (TOPM 32,
+> +0.020, service → 100 %) — every arm costs bpb (the §86.8 regime's fourth appearance), and
+> the t16 rung shows reach without ranking DROWNS (−0.026). The stack b28×t32 lands at ~zero
+> absolute evidence: **§95 must demand the SIGN, not more deltas.** Details: ledger §92–§94,
+> prereg/93, prereg/94.
+>
 > **§91 update (2026-09-18) — the readout story closed; the tag adopted.** The hybrid readout
 > (`selhyb`: shared prior + per-word residual, the spectrum's fourth and last point) fails I1 and I3
 > under its own pre-registered reverse-course rule: it inherits the per-word starvation, and the
