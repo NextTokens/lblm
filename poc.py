@@ -224,7 +224,9 @@ $("play").onclick=async()=>{const r=await api("game",{});
  $("gameres").classList.remove("hidden");
  $("s1").textContent=r.top1+" / "+r.n;$("s3").textContent=r.top3+" / "+r.n;
  $("sconf").textContent=Math.round(r.acc_hi*100)+"% vs "+Math.round(r.acc_lo*100)+"%";
- $("cal").innerHTML=`<b>Honest confidence:</b> splitting the rounds by how confident it felt —
+ $("cal").innerHTML= !r.cal_ok
+  ?`<span style="color:var(--dim)">Not enough rounds to measure confidence honestly — paste a longer text.</span>`
+  :`<b>Honest confidence:</b> splitting the rounds by how confident it felt —
   when <b>most confident</b> it got <b>${Math.round(r.acc_hi*100)}%</b> right; when
   <b>least confident</b> only <b>${Math.round(r.acc_lo*100)}%</b>${r.acc_hi>r.acc_lo?
   " — the confidence means something ✓":"."} It says when it doesn't know.`;
@@ -291,7 +293,7 @@ class H(BaseHTTPRequestHandler):
                 LIVE.reset()
                 cut = int(len(text) * 0.6)
                 LIVE.feed(text[:cut], learn=True)
-                positions = list(range(cut, len(text) - 1))[:40]
+                positions = list(range(cut, len(text) - 1))[:120]
                 qs, top1, top3 = [], 0, 0
                 conf_ranked = []
                 for i in positions:
@@ -316,7 +318,7 @@ class H(BaseHTTPRequestHandler):
                 acc_hi = sum(1 for _c, r in top_third if r == 0) / max(1, len(top_third))
                 acc_lo = sum(1 for _c, r in bot_third if r == 0) / max(1, len(bot_third))
                 self._send(200, {"n": len(positions), "top1": top1, "top3": top3,
-                                 "acc_hi": acc_hi, "acc_lo": acc_lo,
+                                 "acc_hi": acc_hi, "acc_lo": acc_lo, "cal_ok": len(positions) >= 80,
                                  "questions": qs})
         else:
             self._send(404, {})
