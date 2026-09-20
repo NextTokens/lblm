@@ -5027,6 +5027,50 @@ No arm is adopted (the engine already runs `SELSENT=0`); `WSELSENT` defaults to 
 
 ---
 
+## 94. The scope0 ladder — both levers are real, both cost compression; service reaches 100 % but half its votes are uninformative (`prereg/94_ladder.md`)
+
+**Registered before any run** (`prereg/94_ladder.md`, commit `d2f334c`): §93's data named two
+limits — the gate's crowded top-4 (service rate 0.109 under scope0) and the scope–saturation
+interaction (more keys, same cells). Five arms, §87/§93's exact protocol, all `WSELSENT=0`,
+against the §93 reference (`b22/TOPM4`): table ladder b24/b26/b28 and reach ladder TOPM 16/32.
+Paired cluster-bootstrap over fact types.
+
+| arm | bpb | fact `e_first` Δ vs ref [CI] | `inT` fact | served `LA` |
+|---|---|---|---|---|
+| ref b22/T4 | 2.275212 | — | 0.109 | 6.55 |
+| b24 | 2.276515 | −0.0201 [−0.0311, −0.0092] | 0.131 | 5.89 |
+| b26 | 2.279379 | −0.0016 [−0.0170, +0.0139] | 0.145 | 5.47 |
+| **b28** | **2.280652** | **+0.0331 [+0.0150, +0.0524]** | 0.163 | **4.94** |
+| t16 | 2.276250 | −0.0264 [−0.0386, −0.0138] | 0.721 | 7.34 |
+| **t32** | **2.275946** | **+0.0201 [+0.0076, +0.0327]** | **1.000** | 7.46 |
+
+**SA SATURATION: PASS at b28 only** (+0.0331, CI excludes 0) — and the intermediate steps are
+*negative*: b24 hurts (−0.020), b26 is a wash, only full de-collision (2^28 cells, 4.3 GB — the
+size where §87 measured the stream de-colliding) pays. The served `LA` falls monotonically
+6.55 → 4.94 bits: the cue's own cell cleans exactly as §87's R4 predicted. **SB SERVICE RATE:
+PASS** (t32: +0.0201, CI excludes 0, `inT` 0.109 → **1.000** — the cue is served at every fact
+outcome). **S3: every arm costs compression** (+0.0003 to +0.0054 bpb, monotone in table size;
+none crosses the 0.01 TENSION bar, but the direction is uniform — the §86.8 regime's fourth
+appearance, now on the scope axis: memory improvements are paid for in bits/byte).
+
+**The t16 result is §89A's dilution finding transferred to real text, with the sign inverted by
+one rung:** at TOPM 16 service rises to 0.72 but evidence *falls* (−0.026) — the 6 newly-served
+neighbours outvote a half-informed cue; at TOPM 32 the cue's own gate weight dominates (its
+contextual usefulness outranks 31 distractors) and service is complete AND informative. Reach
+does not merely add votes — **the gate's ranking quality decides whether more voices help or
+drown**. And under full service the served `LA` is the *worst* in the grid (7.46 vs 6.55): the
+system-level evidence gain again rides on mixture arithmetic, not on the cue's own cell (§93's
+S4, replicated).
+
+**Branch 1 fires: both levers are real and separable.** The registered follow-up is the stack
+(`b28 × t32`) aimed at the first **positive absolute** served-evidence sign on fact events
+(currently −0.052 at ref; −0.052 + 0.033 + 0.020 ≈ −0.000 — the stack lands exactly at zero, so
+the registration for §95 must demand the sign, not more deltas). No adoption: all arms cost
+bpb, and the engine's candidate space differs.
+
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").
