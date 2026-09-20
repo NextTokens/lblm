@@ -4985,6 +4985,48 @@ normalise".
 
 ---
 
+## 93. The sentence wipe is a real fact-recall defect — removing it helps memory AND compression (`prereg/93_scope.md`, `WSELSENT`)
+
+**Registered before any run** (`prereg/93_scope.md`, commit `8dc730b`): §87 found the instrument's
+memory sentence-scoped — a `.` wipes the slot LRU and 2,220/11,751 fact events (18.9 %) were
+structural zeros; §83 later found whole-stream scope (`SELSENT=0`) wins at engine scale and adopted
+it; the instrument never re-measured. The knob: `wstate.py` `WSELSENT` (default 1 = §81 scoping,
+verified bit-identical: 78759.383835 @30 KB both sides). Two arms, §87's exact protocol
+(`selleanu`, WVBITS2=22, 2700 KB train, 400 KB decontaminated measure, online scoring, one run
+each — the model is deterministic).
+
+**Registered verdicts:**
+
+- **S1 MECHANISM: PASS.** Cross-sentence cue residency 0.029 → **1.000** under `WSELSENT=0`.
+- **S2 EVIDENCE (primary): PASS.** Paired served evidence at the identity byte (cluster bootstrap
+  over fact types): all events **+0.0256 [+0.0117, +0.0406]**; fact-kind events **+0.0719
+  [+0.0515, +0.0938]** — both far exceed the registered ≥0.02 bar with CIs excluding 0.
+  Whole-outcome-word evidence: **+0.4622 bits/word**. The §87 negative (served evidence −0.64…−0.25)
+  moves to −0.05 on fact events: not a sign reversal, but a fifth of the defect removed by one knob.
+- **S3 COST: no tension — scope0 is also BETTER on compression** (2.275212 vs 2.278784, −0.0036
+  bpb). The instrument now matches the engine's §83 finding: whole-stream scope dominates on both
+  axes. The §86.8 memory/compression tension does NOT appear on the scope axis.
+- **S4 `LA − LM` (cell-level, supporting only): does NOT improve.** On the 3,068 events served under
+  BOTH arms, the paired cell-level defect grows +0.2806 [+0.2236, +0.3427]; and the gate serves the
+  cue HALF as often under scope0 (inT 0.204 → 0.109 — the cross-sentence candidate pool crowds the
+  top-4 window). The repair is at the SYSTEM level (better evidence when served, word-level
+  +0.46 bits) while the cue's OWN cell gets dirtier — exactly the §86.8 collision regime: more
+  residency buys more service opportunities and more cell pollution with them.
+
+**Branch 1 of the registration fires: the sentence wipe is a real, cheap, tension-free fact-recall
+lever** — the first since §86 that improves the §87 estimand WITHOUT paying compression. Honest
+scope of the win: the served-evidence defect is reduced by ~a fifth on fact events (−0.1235 →
+−0.0516), not eliminated; the cell-level `LA − LM` defect persists (≈ +3.9 bits on served rows,
+both arms); and the gate's service rate halves — the next lever the data names is the gate's
+crowded top-4 under whole-stream scope (a service-rate/readout question, adjacent to §92B's mixing
+space). Next registered step if continued: `WSELSENT=0 × WVBITS2 ∈ {22,24,26}` — the
+scope–saturation interaction, since scope0 puts MORE keys through the SAME cells.
+
+No arm is adopted (the engine already runs `SELSENT=0`); `WSELSENT` defaults to 1 (bit-identical).
+
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").
