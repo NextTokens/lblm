@@ -1,0 +1,814 @@
+{
+ "rows": [
+  {
+   "blob": "english text",
+   "kind": "low-entropy",
+   "win": 0,
+   "jev": 0.02,
+   "order0": 4.594996273131198,
+   "order1": 3.1081197429799294,
+   "gzip": 4.09765625,
+   "engine": 3.355672
+  },
+  {
+   "blob": "english text",
+   "kind": "low-entropy",
+   "win": 1,
+   "jev": 0.03,
+   "order0": 4.363525264105869,
+   "order1": 3.10670304843979,
+   "gzip": 3.9453125,
+   "engine": 3.276776
+  },
+  {
+   "blob": "english text",
+   "kind": "low-entropy",
+   "win": 2,
+   "jev": 0.02,
+   "order0": 4.531449001600022,
+   "order1": 3.19435954749014,
+   "gzip": 3.9765625,
+   "engine": 3.309584
+  },
+  {
+   "blob": "english text",
+   "kind": "low-entropy",
+   "win": 3,
+   "jev": 0.03,
+   "order0": 4.984920163972737,
+   "order1": 3.061141449624771,
+   "gzip": 4.26171875,
+   "engine": 3.464576
+  },
+  {
+   "blob": "english text",
+   "kind": "low-entropy",
+   "win": 4,
+   "jev": 0.03,
+   "order0": 4.32245822980951,
+   "order1": 3.117884729654352,
+   "gzip": 3.87890625,
+   "engine": 3.200624
+  },
+  {
+   "blob": "english text",
+   "kind": "low-entropy",
+   "win": 5,
+   "jev": 0.02,
+   "order0": 4.60320637614453,
+   "order1": 3.1836470955813843,
+   "gzip": 4.03515625,
+   "engine": 3.334992
+  },
+  {
+   "blob": "english text",
+   "kind": "low-entropy",
+   "win": 6,
+   "jev": 0.02,
+   "order0": 4.550313490652921,
+   "order1": 3.029164999290385,
+   "gzip": 3.6875,
+   "engine": 2.966616
+  },
+  {
+   "blob": "english text",
+   "kind": "low-entropy",
+   "win": 7,
+   "jev": 0.03,
+   "order0": 4.422622453896161,
+   "order1": 3.1444814311746154,
+   "gzip": 4.12890625,
+   "engine": 3.412312
+  },
+  {
+   "blob": "base64(text)",
+   "kind": "STRUCTURED",
+   "win": 0,
+   "jev": 0.06,
+   "order0": 5.48283291739793,
+   "order1": 3.0061148630012977,
+   "gzip": 4.80859375,
+   "engine": 3.958592
+  },
+  {
+   "blob": "base64(text)",
+   "kind": "STRUCTURED",
+   "win": 1,
+   "jev": 0.07,
+   "order0": 5.412103464515611,
+   "order1": 2.9144527614212308,
+   "gzip": 4.73046875,
+   "engine": 3.787832
+  },
+  {
+   "blob": "base64(text)",
+   "kind": "STRUCTURED",
+   "win": 2,
+   "jev": 0.06,
+   "order0": 5.394108404570877,
+   "order1": 2.922140171550397,
+   "gzip": 4.5,
+   "engine": 3.653056
+  },
+  {
+   "blob": "base64(text)",
+   "kind": "STRUCTURED",
+   "win": 3,
+   "jev": 0.05,
+   "order0": 5.463491640222665,
+   "order1": 2.9412514918946546,
+   "gzip": 4.6328125,
+   "engine": 3.774144
+  },
+  {
+   "blob": "base64(text)",
+   "kind": "STRUCTURED",
+   "win": 4,
+   "jev": 0.05,
+   "order0": 5.612860434310157,
+   "order1": 3.1787829927957465,
+   "gzip": 4.78515625,
+   "engine": 4.052304
+  },
+  {
+   "blob": "base64(text)",
+   "kind": "STRUCTURED",
+   "win": 5,
+   "jev": 0.07,
+   "order0": 5.4052087470431935,
+   "order1": 2.8385047106770833,
+   "gzip": 4.4921875,
+   "engine": 3.635928
+  },
+  {
+   "blob": "base64(text)",
+   "kind": "STRUCTURED",
+   "win": 6,
+   "jev": 0.06,
+   "order0": 5.463109450292552,
+   "order1": 2.835121486743313,
+   "gzip": 4.66015625,
+   "engine": 3.70356
+  },
+  {
+   "blob": "base64(text)",
+   "kind": "STRUCTURED",
+   "win": 7,
+   "jev": 0.04,
+   "order0": 5.51091685242599,
+   "order1": 2.944712400645569,
+   "gzip": 4.6796875,
+   "engine": 3.830024
+  },
+  {
+   "blob": "base64(random)",
+   "kind": "STRUCTURED",
+   "win": 0,
+   "jev": 0.19,
+   "order0": 5.977316273807618,
+   "order1": 4.597719151299529,
+   "gzip": 6.1875,
+   "engine": 6.115912
+  },
+  {
+   "blob": "base64(random)",
+   "kind": "STRUCTURED",
+   "win": 1,
+   "jev": 0.32,
+   "order0": 5.9778957375200354,
+   "order1": 4.600300788190525,
+   "gzip": 6.19921875,
+   "engine": 6.12056
+  },
+  {
+   "blob": "base64(random)",
+   "kind": "STRUCTURED",
+   "win": 2,
+   "jev": 0.22,
+   "order0": 5.980702851063628,
+   "order1": 4.560474991391267,
+   "gzip": 6.18359375,
+   "engine": 6.119936
+  },
+  {
+   "blob": "base64(random)",
+   "kind": "STRUCTURED",
+   "win": 3,
+   "jev": 0.15,
+   "order0": 5.970295941199493,
+   "order1": 4.569900064171545,
+   "gzip": 6.19921875,
+   "engine": 6.108768
+  },
+  {
+   "blob": "base64(random)",
+   "kind": "STRUCTURED",
+   "win": 4,
+   "jev": 0.18,
+   "order0": 5.980876287556109,
+   "order1": 4.556847626140022,
+   "gzip": 6.17578125,
+   "engine": 6.119608
+  },
+  {
+   "blob": "base64(random)",
+   "kind": "STRUCTURED",
+   "win": 5,
+   "jev": 0.19,
+   "order0": 5.983287754105236,
+   "order1": 4.603737143878398,
+   "gzip": 6.19140625,
+   "engine": 6.125056
+  },
+  {
+   "blob": "base64(random)",
+   "kind": "STRUCTURED",
+   "win": 6,
+   "jev": 0.22,
+   "order0": 5.976370196407979,
+   "order1": 4.539632317734648,
+   "gzip": 6.19921875,
+   "engine": 6.113448
+  },
+  {
+   "blob": "base64(random)",
+   "kind": "STRUCTURED",
+   "win": 7,
+   "jev": 0.16,
+   "order0": 5.976808783223561,
+   "order1": 4.561537893832678,
+   "gzip": 6.203125,
+   "engine": 6.114648
+  },
+  {
+   "blob": "XOR repeat-key(text)",
+   "kind": "STRUCTURED",
+   "win": 0,
+   "jev": 0.22,
+   "order0": 6.818824217725934,
+   "order1": 2.991867393514309,
+   "gzip": 6.55078125,
+   "engine": 5.262432
+  },
+  {
+   "blob": "XOR repeat-key(text)",
+   "kind": "STRUCTURED",
+   "win": 1,
+   "jev": 0.25,
+   "order0": 6.703046826515798,
+   "order1": 2.9221740212232943,
+   "gzip": 6.47265625,
+   "engine": 5.08664
+  },
+  {
+   "blob": "XOR repeat-key(text)",
+   "kind": "STRUCTURED",
+   "win": 2,
+   "jev": 0.28,
+   "order0": 6.8235189022463265,
+   "order1": 2.920181733877661,
+   "gzip": 6.49609375,
+   "engine": 5.185168
+  },
+  {
+   "blob": "XOR repeat-key(text)",
+   "kind": "STRUCTURED",
+   "win": 3,
+   "jev": 0.28,
+   "order0": 6.9818278392558915,
+   "order1": 3.0167187779971507,
+   "gzip": 6.85546875,
+   "engine": 5.6276
+  },
+  {
+   "blob": "XOR repeat-key(text)",
+   "kind": "STRUCTURED",
+   "win": 4,
+   "jev": 0.2,
+   "order0": 6.6793094841251435,
+   "order1": 2.911485053677494,
+   "gzip": 6.33203125,
+   "engine": 4.908992
+  },
+  {
+   "blob": "XOR repeat-key(text)",
+   "kind": "STRUCTURED",
+   "win": 5,
+   "jev": 0.32,
+   "order0": 6.849527150146285,
+   "order1": 2.940502456535817,
+   "gzip": 6.6484375,
+   "engine": 5.26476
+  },
+  {
+   "blob": "XOR repeat-key(text)",
+   "kind": "STRUCTURED",
+   "win": 6,
+   "jev": 0.29,
+   "order0": 6.838653518908616,
+   "order1": 2.868421720681068,
+   "gzip": 6.2734375,
+   "engine": 5.05876
+  },
+  {
+   "blob": "XOR repeat-key(text)",
+   "kind": "STRUCTURED",
+   "win": 7,
+   "jev": 0.3,
+   "order0": 6.745933536457874,
+   "order1": 2.911762355451752,
+   "gzip": 6.5390625,
+   "engine": 5.118768
+  },
+  {
+   "blob": "ECB(structured recs)",
+   "kind": "STRUCTURED",
+   "win": 0,
+   "jev": 0.03,
+   "order0": 6.373338228804167,
+   "order1": 0.4162048740392953,
+   "gzip": 0.61328125,
+   "engine": 0.455688
+  },
+  {
+   "blob": "ECB(structured recs)",
+   "kind": "STRUCTURED",
+   "win": 1,
+   "jev": 0.03,
+   "order0": 6.3720474019383175,
+   "order1": 0.41701733699697846,
+   "gzip": 0.61328125,
+   "engine": 0.454112
+  },
+  {
+   "blob": "ECB(structured recs)",
+   "kind": "STRUCTURED",
+   "win": 2,
+   "jev": 0.04,
+   "order0": 6.370906343185572,
+   "order1": 0.4176799586768716,
+   "gzip": 0.61328125,
+   "engine": 0.45812
+  },
+  {
+   "blob": "ECB(structured recs)",
+   "kind": "STRUCTURED",
+   "win": 3,
+   "jev": 0.04,
+   "order0": 6.370925384448383,
+   "order1": 0.4181399026146558,
+   "gzip": 0.61328125,
+   "engine": 0.453832
+  },
+  {
+   "blob": "ECB(structured recs)",
+   "kind": "STRUCTURED",
+   "win": 4,
+   "jev": 0.03,
+   "order0": 6.370446623829789,
+   "order1": 0.4181399026146557,
+   "gzip": 0.61328125,
+   "engine": 0.453544
+  },
+  {
+   "blob": "ECB(structured recs)",
+   "kind": "STRUCTURED",
+   "win": 5,
+   "jev": 0.03,
+   "order0": 6.371863864422761,
+   "order1": 0.41720096417424263,
+   "gzip": 0.61328125,
+   "engine": 0.45764
+  },
+  {
+   "blob": "ECB(structured recs)",
+   "kind": "STRUCTURED",
+   "win": 6,
+   "jev": 0.03,
+   "order0": 6.372342625041355,
+   "order1": 0.41720096417424263,
+   "gzip": 0.61328125,
+   "engine": 0.454992
+  },
+  {
+   "blob": "ECB(structured recs)",
+   "kind": "STRUCTURED",
+   "win": 7,
+   "jev": 0.02,
+   "order0": 6.369929780685572,
+   "order1": 0.4186379476821294,
+   "gzip": 0.61328125,
+   "engine": 0.456728
+  },
+  {
+   "blob": "copy/packed",
+   "kind": "STRUCTURED",
+   "win": 0,
+   "jev": 0.55,
+   "order0": 7.904779078791636,
+   "order1": 3.058291397507991,
+   "gzip": 8.08984375,
+   "engine": 8.019096
+  },
+  {
+   "blob": "copy/packed",
+   "kind": "STRUCTURED",
+   "win": 1,
+   "jev": 0.11,
+   "order0": 7.769223707021079,
+   "order1": 2.031243591709306,
+   "gzip": 4.34765625,
+   "engine": 4.058296
+  },
+  {
+   "blob": "copy/packed",
+   "kind": "STRUCTURED",
+   "win": 2,
+   "jev": 0.07,
+   "order0": 7.664228859028024,
+   "order1": 1.5649592344619934,
+   "gzip": 2.8515625,
+   "engine": 2.61444
+  },
+  {
+   "blob": "copy/packed",
+   "kind": "STRUCTURED",
+   "win": 3,
+   "jev": 0.09,
+   "order0": 7.768978811501683,
+   "order1": 2.0330739085249094,
+   "gzip": 4.3515625,
+   "engine": 4.06556
+  },
+  {
+   "blob": "copy/packed",
+   "kind": "STRUCTURED",
+   "win": 4,
+   "jev": 0.1,
+   "order0": 7.6938069048933935,
+   "order1": 1.6520807100486683,
+   "gzip": 3.15234375,
+   "engine": 2.885584
+  },
+  {
+   "blob": "copy/packed",
+   "kind": "STRUCTURED",
+   "win": 5,
+   "jev": 0.08,
+   "order0": 7.768957461473663,
+   "order1": 2.0328612478619803,
+   "gzip": 4.35546875,
+   "engine": 4.059256
+  },
+  {
+   "blob": "copy/packed",
+   "kind": "STRUCTURED",
+   "win": 6,
+   "jev": 0.17,
+   "order0": 7.840144203708303,
+   "order1": 2.5442867269619107,
+   "gzip": 6.03125,
+   "engine": 5.78304
+  },
+  {
+   "blob": "copy/packed",
+   "kind": "STRUCTURED",
+   "win": 7,
+   "jev": 0.08,
+   "order0": 7.599314797037795,
+   "order1": 1.4003184011228895,
+   "gzip": 2.25390625,
+   "engine": 2.027016
+  },
+  {
+   "blob": "gzip(text)",
+   "kind": "random-ish",
+   "win": 0,
+   "jev": 0.09,
+   "order0": 7.850642863617727,
+   "order1": 3.0932737055377633,
+   "gzip": 8.08984375,
+   "engine": 7.933592
+  },
+  {
+   "blob": "gzip(text)",
+   "kind": "random-ish",
+   "win": 1,
+   "jev": 0.47,
+   "order0": 7.879843087781215,
+   "order1": 3.06720643928665,
+   "gzip": 8.08984375,
+   "engine": 7.993352
+  },
+  {
+   "blob": "gzip(text)",
+   "kind": "random-ish",
+   "win": 2,
+   "jev": 0.57,
+   "order0": 7.902859134114945,
+   "order1": 3.054735886078516,
+   "gzip": 8.08984375,
+   "engine": 8.019032
+  },
+  {
+   "blob": "gzip(text)",
+   "kind": "random-ish",
+   "win": 3,
+   "jev": 0.56,
+   "order0": 7.90177669021225,
+   "order1": 3.061563082069043,
+   "gzip": 8.08984375,
+   "engine": 7.996856
+  },
+  {
+   "blob": "gzip(text)",
+   "kind": "random-ish",
+   "win": 4,
+   "jev": 0.55,
+   "order0": 7.916302368925981,
+   "order1": 3.057509913289549,
+   "gzip": 8.08984375,
+   "engine": 8.024256
+  },
+  {
+   "blob": "gzip(text)",
+   "kind": "random-ish",
+   "win": 5,
+   "jev": 0.59,
+   "order0": 7.898941920527466,
+   "order1": 3.0666231521257914,
+   "gzip": 8.08984375,
+   "engine": 8.015288
+  },
+  {
+   "blob": "gzip(text)",
+   "kind": "random-ish",
+   "win": 6,
+   "jev": 0.58,
+   "order0": 7.8955432436741955,
+   "order1": 3.073498710184334,
+   "gzip": 8.08984375,
+   "engine": 8.018744
+  },
+  {
+   "blob": "gzip(text)",
+   "kind": "random-ish",
+   "win": 7,
+   "jev": 0.58,
+   "order0": 7.894426632638944,
+   "order1": 3.0854253741132815,
+   "gzip": 8.08984375,
+   "engine": 8.014792
+  },
+  {
+   "blob": "lzma(text)",
+   "kind": "random-ish",
+   "win": 0,
+   "jev": 0.42,
+   "order0": 7.91141187482447,
+   "order1": 3.055211807926382,
+   "gzip": 8.08984375,
+   "engine": 8.009072
+  },
+  {
+   "blob": "lzma(text)",
+   "kind": "random-ish",
+   "win": 1,
+   "jev": 0.58,
+   "order0": 7.894245724317317,
+   "order1": 3.0700747665598795,
+   "gzip": 8.08984375,
+   "engine": 8.019792
+  },
+  {
+   "blob": "lzma(text)",
+   "kind": "random-ish",
+   "win": 2,
+   "jev": 0.6,
+   "order0": 7.912052290775815,
+   "order1": 3.0571446990918854,
+   "gzip": 8.08984375,
+   "engine": 8.020952
+  },
+  {
+   "blob": "lzma(text)",
+   "kind": "random-ish",
+   "win": 3,
+   "jev": 0.56,
+   "order0": 7.909395711642714,
+   "order1": 3.0548163492966274,
+   "gzip": 8.08984375,
+   "engine": 8.013112
+  },
+  {
+   "blob": "lzma(text)",
+   "kind": "random-ish",
+   "win": 4,
+   "jev": 0.57,
+   "order0": 7.895307917301184,
+   "order1": 3.07942106424575,
+   "gzip": 8.08984375,
+   "engine": 8.014928
+  },
+  {
+   "blob": "lzma(text)",
+   "kind": "random-ish",
+   "win": 5,
+   "jev": 0.53,
+   "order0": 7.905075112600709,
+   "order1": 3.0588713104257432,
+   "gzip": 8.08984375,
+   "engine": 8.016912
+  },
+  {
+   "blob": "lzma(text)",
+   "kind": "random-ish",
+   "win": 6,
+   "jev": 0.57,
+   "order0": 7.905425452809779,
+   "order1": 3.0727738070052686,
+   "gzip": 8.08984375,
+   "engine": 8.021168
+  },
+  {
+   "blob": "lzma(text)",
+   "kind": "random-ish",
+   "win": 7,
+   "jev": 0.56,
+   "order0": 7.907513837027123,
+   "order1": 3.0629223357567366,
+   "gzip": 8.08984375,
+   "engine": 8.01816
+  },
+  {
+   "blob": "AES-CTR(text)",
+   "kind": "RANDOM",
+   "win": 0,
+   "jev": 0.58,
+   "order0": 7.907789651355685,
+   "order1": 3.066026789490812,
+   "gzip": 8.08984375,
+   "engine": 8.01148
+  },
+  {
+   "blob": "AES-CTR(text)",
+   "kind": "RANDOM",
+   "win": 1,
+   "jev": 0.55,
+   "order0": 7.914879502219566,
+   "order1": 3.0543161064994115,
+   "gzip": 8.08984375,
+   "engine": 8.015768
+  },
+  {
+   "blob": "AES-CTR(text)",
+   "kind": "RANDOM",
+   "win": 2,
+   "jev": 0.54,
+   "order0": 7.909164592481001,
+   "order1": 3.0540705417945015,
+   "gzip": 8.08984375,
+   "engine": 8.014704
+  },
+  {
+   "blob": "AES-CTR(text)",
+   "kind": "RANDOM",
+   "win": 3,
+   "jev": 0.56,
+   "order0": 7.911879845500064,
+   "order1": 3.0532459693248457,
+   "gzip": 8.08984375,
+   "engine": 8.021472
+  },
+  {
+   "blob": "AES-CTR(text)",
+   "kind": "RANDOM",
+   "win": 4,
+   "jev": 0.58,
+   "order0": 7.917213142236499,
+   "order1": 3.055419678383954,
+   "gzip": 8.08984375,
+   "engine": 8.016304
+  },
+  {
+   "blob": "AES-CTR(text)",
+   "kind": "RANDOM",
+   "win": 5,
+   "jev": 0.56,
+   "order0": 7.886573833296745,
+   "order1": 3.075796326310816,
+   "gzip": 8.08984375,
+   "engine": 8.021072
+  },
+  {
+   "blob": "AES-CTR(text)",
+   "kind": "RANDOM",
+   "win": 6,
+   "jev": 0.5,
+   "order0": 7.891319628217283,
+   "order1": 3.0865798172278818,
+   "gzip": 8.08984375,
+   "engine": 8.020488
+  },
+  {
+   "blob": "AES-CTR(text)",
+   "kind": "RANDOM",
+   "win": 7,
+   "jev": 0.53,
+   "order0": 7.916167500354458,
+   "order1": 3.047874452046028,
+   "gzip": 8.08984375,
+   "engine": 8.01324
+  },
+  {
+   "blob": "urandom",
+   "kind": "RANDOM",
+   "win": 0,
+   "jev": 0.62,
+   "order0": 7.886165450277222,
+   "order1": 3.0776976021031524,
+   "gzip": 8.08984375,
+   "engine": 8.019344
+  },
+  {
+   "blob": "urandom",
+   "kind": "RANDOM",
+   "win": 1,
+   "jev": 0.58,
+   "order0": 7.91276482128492,
+   "order1": 3.0606804116123487,
+   "gzip": 8.08984375,
+   "engine": 8.022112
+  },
+  {
+   "blob": "urandom",
+   "kind": "RANDOM",
+   "win": 2,
+   "jev": 0.58,
+   "order0": 7.909801765546493,
+   "order1": 3.0611610450160343,
+   "gzip": 8.08984375,
+   "engine": 8.019728
+  },
+  {
+   "blob": "urandom",
+   "kind": "RANDOM",
+   "win": 3,
+   "jev": 0.57,
+   "order0": 7.908517563167638,
+   "order1": 3.0526754790521164,
+   "gzip": 8.08984375,
+   "engine": 8.01356
+  },
+  {
+   "blob": "urandom",
+   "kind": "RANDOM",
+   "win": 4,
+   "jev": 0.57,
+   "order0": 7.895481251244622,
+   "order1": 3.075947749434681,
+   "gzip": 8.08984375,
+   "engine": 8.018768
+  },
+  {
+   "blob": "urandom",
+   "kind": "RANDOM",
+   "win": 5,
+   "jev": 0.56,
+   "order0": 7.887378072759921,
+   "order1": 3.084572731790282,
+   "gzip": 8.08984375,
+   "engine": 8.01412
+  },
+  {
+   "blob": "urandom",
+   "kind": "RANDOM",
+   "win": 6,
+   "jev": 0.57,
+   "order0": 7.909056153842689,
+   "order1": 3.0578194430766645,
+   "gzip": 8.08984375,
+   "engine": 8.011744
+  },
+  {
+   "blob": "urandom",
+   "kind": "RANDOM",
+   "win": 7,
+   "jev": 0.55,
+   "order0": 7.91300483615399,
+   "order1": 3.0501400930843605,
+   "gzip": 8.08984375,
+   "engine": 8.01556
+  }
+ ],
+ "fails": 0,
+ "new_calls": 80,
+ "input_tokens": 323022,
+ "resolved_models": [
+  "jev-1.13.0"
+ ],
+ "seed": 20260921,
+ "instruction": "These bytes are cryptographically random, with no repeated blocks, no periodic structure, and no encoding pattern.",
+ "win": 2048,
+ "nwin": 8
+}

@@ -5485,6 +5485,179 @@ turned out to be a plain error was the one made *outside* the registered analysi
 
 ---
 
+## 96. Jev tested as a rival detector — the run returned NO VERDICT, and the instrument is the finding (`prereg/96_jev.md`, `jevprobe.py`)
+
+**Registered and committed alone at `03a624a`** before any scored call, per the §95 process fix. The
+owner supplied an API key and authorised public-corpora egress only. 80 windows, 0 failures,
+323,022 input tokens, model resolved `jev-1.13.0`.
+
+### 96.1 The question, and why it is not §90
+
+§90 imported Jev's one testable **mechanism** (per-question isolation → a per-word readout) and
+retired it against a pre-registered bar; §92B later showed §90 had mis-attributed its own result.
+§96 asks the different question `honestmap.py` was built to answer, with an outside rival in the
+column set: *is the external model better than us at our own job?* Nothing was integrated into the
+machine. Jev was one more column beside `order0`, `order1`, `gzip` and `engine`.
+
+### 96.2 The result, and the defect that voids its ranking
+
+| blob | kind | jev | order0 | order1 | gzip | engine |
+|---|---|---|---|---|---|---|
+| english text | low-entropy | 0.025 | 4.55 | 3.12 | 4.00 | 3.29 |
+| base64(text) | STRUCTURED | 0.058 | 5.47 | 2.95 | 4.66 | 3.80 |
+| base64(random) | STRUCTURED | 0.204 | 5.98 | 4.57 | 6.19 | 6.12 |
+| XOR repeat-key(text) | STRUCTURED | 0.268 | 6.81 | 2.94 | 6.52 | 5.19 |
+| ECB(structured recs) | STRUCTURED | 0.031 | 6.37 | 0.42 | 0.61 | 0.46 |
+| copy/packed | STRUCTURED | 0.156 | 7.75 | 2.04 | 4.43 | 4.19 |
+| gzip(text) | random-ish | 0.499 | 7.89 | 3.07 | 8.09 | 8.00 |
+| lzma(text) | random-ish | 0.549 | 7.91 | 3.06 | 8.09 | 8.02 |
+| AES-CTR(text) | RANDOM | 0.550 | 7.91 | 3.06 | 8.09 | 8.02 |
+| urandom | RANDOM | 0.575 | 7.90 | 3.07 | 8.09 | 8.02 |
+
+Registered primary, AUC over the 640 RANDOM × STRUCTURED window pairs: **jev 0.994, order0 0.992,
+gzip 0.988, engine 0.984, order1 0.762.**
+
+**That ranking is an artifact of one window and must not be used.** `copy/packed` window 0 carries a
+STRUCTURED label inherited from its blob but contains **none of the blob's repeated chunk** — four
+consecutive fresh PRNG blocks, a 1-in-437 draw (`(56/256)^4`) that 0 of 200 alternative seeds
+reproduce. It is 2,048 bytes of genuinely random data wearing a STRUCTURED label. Every detector is
+*correct* to score it random, and AUC punishes each of them for being right — hardest the ones most
+decisive about it. **100 % of the misordered pairs for jev, order-0, gzip and the engine are that
+single window** (4, 5, 8 and 10 pair-units of 640). Drop that blob and **all four score exactly
+1.0000**.
+
+The registration fixed "8 windows × 2048 B at deterministic offsets" and propagated each blob's
+label to its windows with **no check that a window instantiates the structure its label asserts.**
+That is the §96 defect, and it is the same shape as the hole §92A refuses to paper over: no null
+distribution over windows exists in this project, and here it surfaced as a false window-level label.
+
+### 96.3 The instrument could not have answered its own question
+
+Substitute a **perfect oracle** — 1.0 on every RANDOM window, 0.0 on every STRUCTURED window, AUC
+exactly 1.000, wrong in zero bootstrap replicates. Its blob-clustered paired CI against the engine
+is still **+0.0156 [+0.0000, +0.0469]**, with ~33–50 % of replicates returning exactly zero
+(the point mass is `(0.8 + 0.2·(7/8)^8)^5` when windows are resampled within blobs). All
+discriminating signal lives in one window inside one blob, so the percentile lower bound is pinned
+at zero **for any effect size**.
+
+**Registered branches 1 and 2 were unsatisfiable before the first API call.** Branches 3 and 4
+require Jev to lose or fail outright. §96 could only ever have returned "Jev fails" or nothing, and
+it returned nothing: **no branch fires.** The outcome space has five cells over
+(sign of Δ) × (CI excludes 0 / includes 0); §4 covered three, and both "nominally ahead or behind
+but indistinguishable" cells were uncovered. That is a registration defect, not a sample-size
+accident, and it is recorded here as a §96 result. §5's reverse-course lock is armed only by
+branches 3 and 4, so it is **not** armed in the outcome where re-tuning is most tempting — a
++0.0094 near-miss with the CI touching zero. **It is treated as binding anyway: no prompt tuning, no
+re-rubricking, no switching primitives.**
+
+Power, stated plainly: SD(Δ) = 0.0144, so 80 % power needs a true AUC difference of 0.040 (normal)
+or 0.203 (cluster-t at the honest df = min(2,5) − 1 = 1). The largest difference that can exist
+against an engine at 0.984 is 0.016. With 2 RANDOM clusters, half the replicates draw the same blob
+twice — that is not a thin cluster count, it is no cluster count.
+
+### 96.4 What Jev is on this job
+
+Competent, and not a new capability. Spearman **+0.92** with gzip bits/byte and **+0.91** with the
+engine: on this corpus it is a monotone entropy proxy with well-calibrated ranks. It never asserts
+randomness at all — its answer for OS `urandom` is **0.575**, and its maximum over all 80 windows is
+**0.62**, on a question that asks exactly whether the bytes are cryptographically random.
+
+The registered fairness control does not fire (English-as-hex vs urandom-as-hex, AUC 1.000), so hex
+is not the binding constraint. But that control is low-entropy-vs-random, the easiest contrast in the
+corpus; it rules out one explanation of a negative and is **not** evidence for a positive.
+
+Its apparent lead is an artifact twice over: it exists only because of the mislabelled window, and
+only at the one window size Jev's token budget bought. At W = 4096 — same design, genuinely
+non-overlapping — order-0, gzip and the engine all reach **1.0000**, above Jev's 0.9938. Under either
+alternative treatment of the `random-ish` blobs the ordering also moves: counting them as RANDOM puts
+Jev **last** of four (0.978 against order-0's 0.989).
+
+**One thing it did that no statistical detector did:** on `gzip(text)` window 0 — the window holding
+the `1f8b08` magic header — Jev read **0.09** while order-0 read 7.85, gzip 8.09 and the engine 7.93.
+That is a different *kind* of read: a format signature, not a statistical property. It is also what
+`file`/libmagic returns for free and instantly, and that window sits in a blob the registration
+excludes from the primary metric. A hypothesis, not a result — and its rival is libmagic, not the
+engine.
+
+### 96.5 What honestmap owed a correction for, independent of Jev
+
+`honestmap.py --prove` printed, in one line, `RANDOM avg 8.00 vs STRUCTURED avg 6.50 -> gap 1.49
+bits  (it CANNOT separate them)`, and its HONEST READ said `random==structured`. Both are
+contradicted by the number printed beside them. Order-0 **does** separate this corpus by 1.49 bits
+and at the 48 KB blob level ranks it perfectly (AUC 1.000 — as do gzip, order-1 and the engine, so
+no ordering exists between them there either).
+
+What the sentence is defensibly about — thresholding **absolute** entropy, which is what `binwalk -E`
+and `ent` actually do — §96 **strengthens**: order-0's usable threshold band at 97.5 % recall with
+zero false alarms is **0.046 bits** against the engine's **1.886**; at binwalk's conventional t = 7.5
+order-0 flags 80 % of STRUCTURED windows to the engine's 97.5 %, and at t = 7.9 it false-flags
+**31 %** of RANDOM windows while the engine false-flags none; and on `copy/packed` — the one blob
+that genuinely instantiates the premise, high order-0 entropy *with* structure — order-0's margin is
+**0.15 bits** against the engine's **5.99**. **The fix owed is the wording, not the finding**, and it
+is made in place.
+
+A worse defect in the same function is fixed with it: `label_of()`, applied to the engine's own
+number, used order-0 entropy bands on a detector with a different scale and **mislabelled 4 of the 5
+STRUCTURED blobs as "text/low"** (engine 6/10 correct, gzip 7/10, order-0 8/10, order-1 2/10). For
+the engine, *low* bits/byte **is** the structure signal.
+
+**None of this needed an external rival.** The contradiction was printed by honestmap's own `--prove`
+before §96 ran. Deleting the Jev column leaves the finding untouched.
+
+### 96.6 Four of my own sentences, withdrawn
+
+1. "order-0 beats the engine" — **withdrawn.** On the magnitude honestmap's claim is denominated in,
+   the engine leads 5.29 bits to 1.49; on a magnitude-aware effect size the ordering flips
+   (d′ engine 2.26 > order-0 2.13); and the AUC ordering is the mislabelled window.
+2. "adding an external rival is what surfaced it" — **withdrawn**, per above.
+3. "the corpus is saturated / a ceiling effect" — **withdrawn.** No scale is compressed (Jev spans
+   0.02–0.62, the engine 0.02–8.02). The task is simply too easy: at blob level everything scores
+   1.000.
+4. "my windowing handicaps the engine, and only on the STRUCTURED class" — **withdrawn as stated.**
+   The handicap is real but not the engine's alone: order-0 0.06 bits, gzip 1.17, engine 1.23,
+   order-1 3.16 — and 84 % of order-1's falls on the RANDOM class. The honest statement is stronger
+   and worse: **§96 did not measure Jev against the engine; it measured every detector against my
+   token budget**, and the single window size that budget bought is the only one at which Jev leads
+   anything. The registration anticipated the encoding handicapping Jev and controlled for it; it
+   registered no control in the opposite direction, and that is the one that bit.
+
+### 96.7 Process defects, and the fixes
+
+`gzip.compress` stamps the current time into header bytes 4–7, so the `gzip(text)` blob was not
+reproducible (79 of 80 cache keys re-derive; one is permanently orphaned). `rows.json` did not record
+the blob sha256s §3 requires. **And the paired blob-clustered CI the branches turn on was never
+implemented in the runner** — `report()` printed the branch conditions as text and evaluated none,
+so the first published CI bounds did not reproduce. That is precisely the §92-class defect this
+registration claimed to be fixing, committed inside the section that claimed it. All fixed:
+`mtime=0`, blob shas recorded, `paired_auc_boot` in `jevprobe.py`, and the ±1 order statistic in
+`auc_boot` corrected.
+
+### 96.8 Verdict
+
+**Does Jev patch a missing link? No — and this run cannot be used to argue either way.** The
+registered question was not answered because the instrument had no resolution; a perfect oracle would
+also have failed the registered bar. What §96 established is real and is about the harness, not about
+Jev: one mislabelled window carried the entire ranking, honestmap overstated its own premise in a
+word, and `label_of` was wrong about 4 blobs in 5.
+
+Against adoption, on the evidence: Jev adds no capability the engine lacks on this job (ρ ≈ 0.92 with
+gzip); the one thing it uniquely saw is a magic-header lookup in an excluded blob; its lead is an
+artifact of a mislabelled window at a budget-chosen window size; it costs 323,022 tokens to score
+160 KB where the engine scores a 2 KB window in 0.23 s locally, free and offline; its numbers cannot
+be re-derived from a clone without a key and a bill. And it fits neither track: the project's use is a
+**training-free** monitor over opaque byte streams, and its stated goal is **learned memory and
+selection**. Jev is a frozen remote scalar with neither.
+
+**What would have to change, all four and not any one:** a corpus built against the engine's
+*failures* rather than its successes, with a registered window-level label check; a design with
+power (≥ 8–10 blobs per class, a metric with headroom such as partial AUC at zero false alarms, and
+the resampler living in the committed runner); like-for-like window sizing chosen by the task rather
+than by one rival's token budget; and a capability that is not entropy rank — tested against
+`libmagic`, which is the real rival for the only thing Jev did uniquely.
+
+
+---
+
 ## Appendix — prior-art map (search terms, all bit/discrete, not LLM-specific)
 
 - **Semantic hashing** — learn compact binary codes preserving similarity (the learned "hash").

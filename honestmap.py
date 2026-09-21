@@ -146,7 +146,13 @@ def gzip_bpb(b):
 
 
 def label_of(en):
-    return "text/low" if en < 4.0 else ("STRUCTURED" if en < 7.0 else "RANDOM")
+    """§96 CORRECTION (2026-09-21). The old thresholds were order-0 entropy bands applied to the
+    ENGINE's bits/byte, which runs on a different scale: a blob the engine codes at 2.0 bits/byte is
+    maximally structured, and the old table called it "text/low". Measured on the §96 deterministic
+    corpus the old function got 6/10 blobs right and mislabelled 4 of the 5 STRUCTURED ones. For the
+    engine LOW bits/byte IS the structure signal; "text/low" is not separable from "structured" by
+    bits/byte alone, so the band is removed."""
+    return "STRUCTURED" if en < 7.0 else "RANDOM"
 
 
 def prove():
@@ -171,7 +177,13 @@ def prove():
     en_rand = sum(d[5] for d in rand) / len(rand)
     en_str = sum(d[5] for d in structn) / len(structn)
     print(f"order-0 entropy (binwalk):  RANDOM avg {o0_rand:.2f}  vs  STRUCTURED avg {o0_str:.2f}   "
-          f"-> gap {o0_rand - o0_str:.2f} bits  (it CANNOT separate them)")
+          f"-> gap {o0_rand - o0_str:.2f} bits")
+    print("  §96 CORRECTION: this line used to read '(it CANNOT separate them)'. That overstated it, and")
+    print("  was contradicted by the number printed beside it. Order-0 DOES separate these classes, and at")
+    print("  the 48 KB blob level it ranks them perfectly. What it cannot do is what binwalk -E and ent")
+    print("  actually do -- threshold ABSOLUTE entropy: its usable band at 97.5% recall with zero false")
+    print("  alarms is 0.046 bits against the engine's 1.886, and on copy/packed (the one blob that is")
+    print("  genuinely high-entropy-WITH-structure) its margin is 0.15 bits against the engine's 5.99.")
     print(f"ENGINE bits/byte:           RANDOM avg {en_rand:.2f}  vs  STRUCTURED avg {en_str:.2f}   "
           f"-> gap {en_rand - en_str:.2f} bits  (clean separation)")
     # where the engine beats the STRONG cheap baseline (gzip): structure gzip's LZ77 under-rates
@@ -183,8 +195,8 @@ def prove():
             print(f"   {label:<22} gzip={gz:.2f}  ENGINE={en:.2f}  (engine finds {gz - en:.2f} bits more structure)")
     if not any_edge:
         print("   none materially — gzip matches the engine on this corpus's structured cases.")
-    print("\nHONEST READ: order-0 entropy is blind (random==structured); the ENGINE separates them cleanly,")
-    print("and reads RANDOM (AES-CTR/urandom/strong-gzip) at ~8 while pulling ECB/XOR/encoded/packed out as")
+    print("\nHONEST READ: order-0 separates these classes by ~1.5 bits but is USELESS AS A THRESHOLD (0.046 bits of")
+    print("usable band, §96); the ENGINE separates them by ~5.3 bits and thresholds cleanly, reading RANDOM at ~8 while pulling ECB/XOR/encoded/packed out as")
     print("structured. gzip is a strong cheap rival on literal-repeat structure; the engine is a finer,")
     print("byte-native detector (and one engine for ANY stream). Non-goal, stated: it cannot")
     print("tell strong-compressed from encrypted (both ~random) and it flags STRUCTURE, not malice.")

@@ -101,3 +101,5 @@ _cal/*.md
 !.env.example
 *.key
 secrets.json
+!jevprobe.py
+_96/*.md
