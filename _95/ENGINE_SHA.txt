@@ -1,0 +1,14 @@
+735799fdd4377ed6cf973b55c42c15935b6368bab752f9e9c51e4d31b3c29a95 *wstate.py
+78f56541987dc59b285cebcfd363c4a9ab2c5732276a404b39d9ea77a8c00cd8 *genmem.py
+19ade64ef8273bef5c6774a1ac0d7458f9f315df38254e62da5f346bd8d7a0c6 *_factprobe.py
+
+# §95 launch provenance (the JSONs do NOT record WSELSENT/env -- recording gap vs
+# prereg/95_tag.md §3, which required an env block + engine sha in each artifact).
+# Verifiable from the artifact instead: resident_first is identical on all 9,395 fact
+# rows across _93/scope0.json and all three §95 arms, and §93 showed scope1->scope0
+# moves residency 0.029 -> 1.000, so every §95 arm demonstrably ran under WSELSENT=0.
+#
+# export WNS=1 WSLOTMODE=word WSLOTS=32 WSELSENT=0
+# WVBITS2=22 WSELTAG=0 python _factprobe.py --job selleanu 22 2700 400 100 _95/gate_b22_notag.json
+# WVBITS2=22 WSELTAG=1 python _factprobe.py --job selleanu 22 2700 400 100 _95/s0_b22_tag.json
+# WVBITS2=28 WSELTAG=1 python _factprobe.py --job selleanu 28 2700 400 100 _95/s0_b28_tag.json
