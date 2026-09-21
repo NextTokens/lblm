@@ -94,3 +94,10 @@ _94/*.json
 _95/*.json
 _95/*.md
 _cal/*.md
+
+# secrets -- never commit
+.env
+.env.*
+!.env.example
+*.key
+secrets.json
