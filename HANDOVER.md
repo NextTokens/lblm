@@ -1,5 +1,23 @@
 # HANDOVER — the LBLM intelligence track, post-§89
 
+> **§95 update (2026-09-20) — the tag buys de-collision's repair for 1/60 of the memory; the sign is
+> still negative. Read ledger §95, then §92A-ADDENDUM.** §94's two levers were re-read on §89A's own
+> |T|-invariant statistic: **reach is a mixture-denominator artifact** (sign-mean gets monotonically
+> *worse*, ~71 % of served votes still wrong at t32) and **de-collision is the only clean lever** — but
+> it costs 4.29 GB. §95 tested the 8-bit tag against it in a **2 × 2** (`{b22,b28} × {tag off,on}`, two
+> cells already on disk), registration committed **alone** before any arm ran. Bit-identity gate PASS on
+> every key but `secs`. Result: at 2^22 the tag is **not detectably different** from de-collision at 2^28
+> (Δsign +0.0398 [+0.0205,+0.0637] vs +0.0386; cross-arm +0.0012 [−0.0151,+0.0163]) for **71.3 MB against
+> 4,295 MB**, and it repairs §87's cell-level estimand too (paired `LA−LM` −0.5143 [−0.9447,−0.1438],
+> n=595). The mechanism is **same-row repair**: 80 % of the gain is on the 761 rows served by both arms,
+> 234 wrong votes → right against 83 the other way; net service is +0.0079, *positive*. **Branches 2 and
+> 7 fire; branch 1 does not** — b22+tag's sign-mean is −0.0077, and b28+tag's first-ever positive
+> +0.0182 has CI [−0.0078,+0.0433]. The bpb gain (−0.009011) is an **interaction**, not a tag property:
+> at 2^28 the same tag costs +0.006991, and §89B measured it costing +0.000639 under sentence scope.
+> Red-team overturned 3 of 4 drafted sentences. **Next: the sign, or the engine port of (tag × scope0).**
+> A round trip on the tagged path does not exist anywhere in the repo — bpb here is a probe
+> cross-entropy, not a verified code length, so §80 adoption is not yet a question.
+
 > **§93–§94 update (2026-09-19) — the scope thread, opened and mapped.** §92 (committed from a
 > parallel session) measured calibration for the first time (odds run 8–11 % too strong; ECE
 > 0.007–0.010 vs floor 0.0004) and refuted §90/§91's mechanism story via the missing 2×2 (the
@@ -240,6 +258,13 @@ the committed instrument uses a hashed 2^22 table whose collisions cut the probe
    keep the text unedited, adding corrections after; verify decodability before adopting a default.
 
 ## 5. The way forward
+
+> **SUPERSEDED 2026-09-20.** The lever proposed in this paragraph was built and retired: §90 implemented
+> the per-word readout (`seliso`) and it failed its own pre-registered reverse-course rule, §91 the hybrid,
+> and §91A forbade further readout iterations on this probe. §92B then showed §90/§91 attributed their
+> result to the wrong variable. Do not re-run it. The live thread is §93–§95: de-collision is the only
+> surviving fact-recall lever (§94's reach lever is a denominator artifact) and §95 showed the 8-bit tag
+> reaches it at 1/60 of the memory. The section below is kept unedited as the record of what was proposed.
 
 **Next lever (pre-register before building): per-word or per-reliability readout weighting.** Replace the
 one readout dial shared by every word at a context with one keyed by the selected word's own usefulness

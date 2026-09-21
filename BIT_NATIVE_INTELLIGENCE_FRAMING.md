@@ -558,9 +558,15 @@ bit-address — scale, stochastic dynamics, and function approximation remain op
 
 > **Confidence + action update.** The core now acts on its own *uncertainty*: predicting the next byte
 > and choosing commit-or-abstain by confidence, it turns a losing always-commit policy (−1.18
-> reward/byte) into a winning one (+0.16) by abstaining when unsure — and its confidence is calibrated
-> (accuracy@commit rises 0.57→0.95 as the threshold tightens). This exercises the framing's confidence
-> criterion alongside action, on real data.
+> reward/byte) into a winning one (+0.16) by abstaining when unsure — and its confidence **ordering is
+> informative** (accuracy@commit rises 0.57→0.95 as the threshold tightens). This exercises the framing's
+> confidence criterion alongside action, on real data.
+>
+> **CORRECTION 2026-09-20 (§92A).** This paragraph said "its confidence is **calibrated**". That word is
+> withdrawn: an accuracy-at-commit curve is monotone for any informative confidence *ordering*, including
+> a uniformly 2× overconfident model. Calibration was first measured in ledger §92A and the machine is
+> overconfident on new text (Platt slope 0.921 / 0.885) and *under*confident on text it has effectively
+> seen (1.072 / 1.027). The ranking property this paragraph relies on is real and is what it should claim.
 
 > **Scale update.** Scaled to a 5.4 MB real-English corpus: the strong model reaches ~0.22 bits/bit
 > (vs gzip ~0.36) and beats gzip at every size. But the gain from more data **plateaus beyond ~1 MB** —

@@ -1351,6 +1351,15 @@ Real prose, 200 KB.
 - Next-byte top-1 accuracy **0.565** (chance 1/256).
 - **Confidence is calibrated:** accuracy@commit rises monotonically (0.57 → 0.95) as the threshold
   tightens — higher self-confidence really does mean higher accuracy.
+  > **CORRECTION 2026-09-20 (§92A).** This sentence is **withdrawn**. An accuracy-at-commit curve is
+  > monotone for *any* model whose confidence **ordering** is informative, including one that is
+  > uniformly 2× overconfident — it is selective prediction, not calibration, and the inference from
+  > one to the other was never valid. Calibration was first measured in §92A and the machine is
+  > **overconfident**: on decontaminated held-out text Platt slope 0.921 (400 KB) and 0.885 (2700 KB).
+  > What this line actually demonstrates — that the machine **ranks** its own confidence correctly —
+  > stands, and is a real property. See §92A, and note that the per-**bit** figures quoted there do not
+  > transfer to this **byte**-level claim without their own measurement (they now have one: §92A's
+  > byte-level secondary, ECE 0.01608 against a 0.00557 floor at n = 28,255).
 - **Always-commit loses** (−1.177 under the asymmetric reward); **confidence-gating wins** (+0.158 at
   τ=0.80) by committing only when confident and abstaining otherwise.
 
@@ -4724,6 +4733,14 @@ confidence and no disclosed internals; this project ships an online learner with
 every claim reproduced from source. Both treat calibrated uncertainty as the product; only one adapts
 after deployment.
 
+> **CORRECTION 2026-09-19 (§92B).** §90's **mechanism** sentence is refuted. The 2-exposure trust was
+> credited here to *per-question isolation* — "an unreliable word cannot move a reliable word's dial
+> **by construction**". §92B added the two missing cells of the 2 × 2 and found `seliso` differs from
+> the shipped `sel` in **four** ways, not one. `selmix` — one **shared** dial, no isolation whatever —
+> votes at **zero** exposures, better than `seliso`'s two. The fast trust came from the **mixing
+> space** (logit rather than probability), not from isolating the dials. §90's *verdict* (the import
+> fails its registered bar and is retired) stands; its *attribution* does not. See §92B.
+
 
 ---
 
@@ -4788,6 +4805,17 @@ The tag is adopted on this table (uniform gains incl. the 30MB slice, +0.00046�
 further candidate left unadopted pending the §80 held-out ritual. Lesson recorded: a headline number
 without its full flag line is not reproducible — every future headline run logs `flags:` (printed since
 §84) into the ledger verbatim.
+
+> **CORRECTION 2026-09-19 (§92B).** §91's **starvation** mechanism and §91A's "the spectrum is now
+> fully measured" are both withdrawn. The per-word `max|w|` 4.5 against the shared readout's 30.6 was
+> never apples-to-apples: with |T| unnormalised dials summing and the gate weights dropped, each dial
+> needs roughly `1/|T|` the magnitude for the same contribution. Hold the normalisation and gate
+> weights fixed (`selisn`) and the per-word arm becomes the **best** of the logit-mixing family
+> (I1 0.340 / 0.178, passing the 0.3 bar on seed 8) — `seliso` and `selhyb`, the two arms §90 and §91
+> generalised from, are the **worst**. On corpus text **88.6 %** of their damage comes from the
+> unnormalised sum and dropped gate weights, a variable neither section named; the mixing space is
+> 0.9 % and the dial keying 10.5 %. The spectrum was never the axis being varied. §91A's *conclusion*
+> — no arm passes, the readout component is unsolved at this data scale — stands. See §92B.
 
 ---
 
@@ -4905,6 +4933,81 @@ make a surprisal total over a window calibrated for a decision, and no null dist
 exists anywhere in this project. The registration said so in advance and the red-team confirmed the
 firewall holds mechanically: `poc.py`'s alarm compares realised bits/char against its own baseline and
 never uses `p` as a probability.
+
+### 92A-ADDENDUM (2026-09-20) The control landed, the byte level was measured, and the withdrawn scale sentence comes back
+
+The registration left two obligations. Both are now discharged, and both changed a conclusion above.
+
+**The decontamination control (AMENDMENT 1), at both levels and both scales.** The masked capture is
+*bit-for-bit* the retained subsequence of the full-slice one (`p` maxdiff `0.0`, `y` identical on all
+1,131,528 bits), so the masked-**out** complement — the thing AMENDMENT 1 said would be "recorded from
+the same run" and was not — is exactly recoverable. Retained fraction 69.06 % at 400 KB, 41.62 % at
+2700 KB.
+
+| level | scale | retained (decontaminated) | full slice | masked-out (leaked) |
+|---|---|---|---|---|
+| bit | 400 KB | ECE 0.00695 · Platt **0.921** | ECE 0.00349 · Platt 0.955 | ECE 0.00369 · Platt **1.072** |
+| bit | 2700 KB | ECE 0.01026 · Platt **0.885** | ECE 0.00342 · Platt 0.952 | ECE 0.00193 · Platt **1.027** |
+| byte | 400 KB | ECE 0.01608 · gap **+0.0050** | ECE 0.01813 · gap −0.0086 | ECE 0.03870 · gap **−0.0387** |
+| byte | 2700 KB | ECE 0.02442 · gap **+0.0231** | ECE 0.01660 · gap −0.0052 | ECE 0.02716 · gap **−0.0253** |
+
+Branches: **2 + 4** at bit level, both scales (ECE falls 49.8 % and 66.7 % of value — more than the
+registered third on the headline binning; note the four pre-committed binnings give 36.4 / 36.0 /
+49.8 / 31.8 %, so quantile-20 is *below* the line and the registered headline is the most
+branch-2-favourable of the four). **1 + 4** at byte level / 400 KB (+12.7 %, inside the ±15 % window —
+the byte-level effect is *not* a selection artifact). **3 + 4** at byte level / 2700 KB (−32.0 % of
+value but −40.5 % of distance-to-floor: the two readings straddle, so both figures are reported side
+by side and the scope clause is permanent there).
+
+**The headline "the odds run about 8 % too strong" is corrected.** That is the figure for the
+**decontaminated subset**, not for the machine. The licensed statement is the **pair**, and the
+full-slice number is a 69/31 mixture of two opposite regimes, not a selection-free measurement of
+anything. Quoting the blend as "the machine" would be the same error one level up.
+
+**The withdrawn scale sentence comes back, on the correct population.** §92A withdrew "ECE is roughly
+flat with 10× more training" as confounded three ways. On the **full slice** — no outcome-dependent
+selection anywhere — calibration is flat across 6.75× more training: bit-level ECE **0.00349 →
+0.00342**, Platt **0.955 → 0.952**; byte-level ECE 0.01813 → 0.01660 while top-1 accuracy *rises*
+0.6396 → 0.6495 and bpb falls 1.884 → 1.772. The apparent worsening above (0.00695 → 0.01026, Platt
+0.921 → 0.885) is **entirely** the filter keeping a harder, more-novel subset at the larger scale.
+The red-team was right to strike the sentence; the control it forced supplies unconfounded evidence
+for it, with different numbers. **The machine gets more accurate with training and no more honest.**
+
+Only the full-slice row carries a scale claim. Comparing *retained* at 400 KB to *retained* at
+2700 KB remains unlicensed — those are different populations, which is the original confound. The
+over/under split, by contrast, is a within-run partition of the same text and is clean at each scale.
+
+**The finding that holds at both levels, both scales, and is the one worth keeping:** on text it has
+effectively seen, the machine **understates** its certainty; on genuinely new text it **overstates**
+it. At the byte decision the familiar half is stark — it calls 0.698 and is right 0.736 of the time.
+The same split runs through the surprise tail: sub-1e-4 surprises occur 4.35× more often than stated
+on decontaminated text and **0.34×** on the leaked text. **Both errors compress the familiar-vs-novel
+surprisal gap**, which is exactly the quantity a novelty monitor thresholds on. That is now measured
+at two levels with a control at each, rather than asserted.
+
+**The byte-level secondary (§3's binding rule, "if only one is measured, only one may be claimed").**
+Now measured, and the first reading of it was wrong. At stride 50 (n = 2,789) ECE 0.01778 sat on a
+floor of 0.01783 — ratio 1.00, apparently branch 1 — but the floor was 2.5× the effect and the test
+had no power. At stride 5: **n = 28,255, ECE 0.01608 against floor 0.00557 (p95 0.00817), r = 2.88**
+at 400 KB, and **n = 34,082, ECE 0.02442 against 0.00513, r = 4.76** at 2700 KB, nine of ten bins
+negative, stated 0.5871 against 0.5640 observed. Both levels are measurably miscalibrated; the
+**shapes differ** (bit level is mid-band overconfident, byte level at 400 KB is S-shaped and at
+2700 KB uniformly overconfident), which is precisely why the rule was registered.
+
+**Two defects in this section's own apparatus, found and fixed 2026-09-20.** `poc.py` was recorded
+above as **"Fixed."** for the `htail` bug and it was not — `poc.py` is not in the §92 commit at all,
+and at HEAD it still advanced `htail` one bit at a time. Measured damage: top-1 **13.2 % → 40.8 %**,
+top-3 14.4 % → 62.4 %, mean displayed confidence 0.0835 → 0.4164. Every user-facing number in the
+demo, including its "Honest confidence" tertile claim, was computed on the corrupted beam. And
+`calprobe`'s self-test **S4** — cited above as the guard that makes this bug class impossible —
+**failed** (7.14e-01 against a 1e-9 gate) and crashed the suite two tests later by shadowing S2's
+captured `p`; it compared a non-learning beam against `step(learn=True)`, so it could never pass, and
+`calprobe.py` has one commit, so the gate had never been green in any commit in this repository's
+history. Both fixed: S4 now 1.776e-15, all four tests pass.
+
+**One claim in the session notes for this section was a unit error and never entered the ledger:**
+that the instrument's tag gain was "seven times" §89B's engine gain. §89B's +0.001213 is bits per
+*bit* = +0.009704 bits per byte, against 0.009011 — a ratio of 1.08. No anomaly existed.
 
 ### 92B §90 and §91 changed four variables and named the wrong one
 
@@ -5024,6 +5127,53 @@ scope–saturation interaction, since scope0 puts MORE keys through the SAME cel
 
 No arm is adopted (the engine already runs `SELSENT=0`); `WSELSENT` defaults to 1 (bit-identical).
 
+> **CORRECTION 2026-09-20 (§92–§94 audit, verified against `_93/*.json`).** §93's *direction*
+> survives on a scale-immune statistic; most of its published apparatus does not.
+>
+> 1. **The headline is a product, not the conditional it is labelled as.** `e_first` is zero for
+>    unserved rows (`_factprobe.py`), so S2's +0.0256 / +0.0719 are **unconditional** means, exactly
+>    `P(served) × E[e | served]`. The pair: P(served) **0.2041 → 0.1091** — it *halves* — while
+>    E[e|served] moves −0.6052 → −0.4726. Holding the conditional fixed and applying only the service
+>    drop already yields **+0.0575 of the +0.0719 (80 %)**. On all events the conditional gets
+>    *worse* (−0.4337 → −0.5258). §89A's amendment — "the pair, **never their product alone**" — was
+>    dropped by this registration and is reinstated from §95 onward.
+> 2. **The registration's own anchor was a served-conditional series.** `prereg/93_scope.md` anchors
+>    S2 on §87's "served evidence −0.64 → −0.25", and §87's table is restricted to events served at
+>    every rung — every row served. §93 answered a conditional criterion with an unconditional
+>    statistic of a different kind.
+> 3. **"~a fifth of the defect removed" is 58 %.** (0.12351 − 0.05157)/0.12351 = **0.582** — nearly
+>    three fifths, written next to the two endpoints it is computed from.
+> 4. **"+0.4622 bits/word" is a logit, not bits.** `ev` is a logit quantity; the actual bits saved per
+>    word is `d(gain_word)` = **+0.000811 [−0.00022, +0.00188]** — 570× smaller and spanning zero.
+> 5. **The priority claim is false.** "the first since §86 that improves the §87 estimand WITHOUT
+>    paying compression" — §89A already claimed better memory *and* better compression. §93 could
+>    honestly have claimed the first **untagged** instance; as written the clause is wrong.
+> 6. **The reported CIs are not the registered resampler's.** Under `_factprobe.py`'s own
+>    `two_level_boot` (BOOT 2000, SEED 20260917) the all-events interval is **[+0.0024, +0.0499]** —
+>    lower bound *below* the registered ≥0.02 bar. The fact-kind criterion survives
+>    (+0.0719 [+0.0423, +0.1058]); "both far exceed the bar" does not.
+> 7. **§87's ADJ filter was not applied** (1,736 rows, 5 %), so "identical to §87's registered
+>    protocol in every respect except the knob" is false as stated. Direction survives.
+> 8. **S4's estimand does not exist on 60 % of the rows it is averaged over.** `LM` is never written
+>    for `else`/`cross` kinds, so `LA − LM` there is a raw coding cost. "≈ +3.9 bits on served rows,
+>    both arms" is wrong by ~13× and false in "both arms".
+> 9. **Registered branch 2's population was never read.** The 2,220 cross-sentence events the knob
+>    exists to rescue move **against** the headline (paired −0.0268 [−0.0475, −0.0077]); residency
+>    rises to 1.000 but service barely moves (0.0252 → 0.0342). §93 fired branch 1 without looking at
+>    the population branch 2 is about.
+> 10. **"Registered before any run (commit `8dc730b`)" is false** — `prereg/93_scope.md` was first
+>     committed in `d2f334c`, its own result commit. Filesystem mtimes support pre-registration; git
+>     does not. Fixed from §95, whose registration was committed alone.
+> 11. **"tension-free" appears in no registered branch** and was added at write-up time.
+>
+> **What stands.** The effect is genuinely fact-specific (+0.0741 against the clean C-ELSEWHERE
+> control; C-NULL is 70 % facts and this ledger's own red-team already banned it for specificity),
+> and it is real on §89A's |T|-invariant sign-mean: **+0.0408 [+0.0280, +0.0540]** on fact rows. But
+> it **lives entirely at sentence-initial positions** — binned on the reference's `cand_n` the gain
+> runs +1.3410 (cand_n < 4) down to −0.0157 (28–32) — which supports the stated mechanism while
+> confirming the +0.0719 magnitude is inflated by 1/`cand_n`.
+
+
 
 ---
 
@@ -5067,6 +5217,270 @@ S4, replicated).
 (currently −0.052 at ref; −0.052 + 0.033 + 0.020 ≈ −0.000 — the stack lands exactly at zero, so
 the registration for §95 must demand the sign, not more deltas). No adoption: all arms cost
 bpb, and the engine's candidate space differs.
+
+> **CORRECTION 2026-09-20 (§92–§94 audit, verified against `_94/*.json`).** §94's arithmetic
+> reproduces digit for digit. **SA survives; SB is a mixture-denominator artifact and §94 fired the
+> wrong branch on it.**
+>
+> 1. **The reach lever does not improve the cue's vote.** On §89A's own |T|-invariant sign-mean —
+>    named in this ledger as the scale-immune check — the ladder runs ref **−0.0451** → t16
+>    **−0.3927** → t32 **−0.4271**: monotonically *worse*. Conditional on service, `E[sign|served]`
+>    is −0.4135 at ref and −0.4271 at t32, i.e. **about 71 % of served cue votes point the wrong way
+>    at both ends**. Meanwhile `mean|e|` on served events collapses 0.7227 → 0.1532 → **0.0674**, a
+>    10.7× shrinkage, because `f_without` rebuilds a weight-normalised mixture whose per-event
+>    magnitude falls as |T| grows — and this ladder varies exactly |T|. SB's "+0.0201" is that
+>    shrinkage of a still-wrong vote against a negative baseline, multiplied by a service rate driven
+>    to 1.000. **The registration's other branch is the one the data fires:** *"service without
+>    evidence: the newly-served votes are uninformative"* — at t32 as well as t16.
+> 2. **"At TOPM 32 the cue's own gate weight dominates ... outranks 31 distractors" is false on the
+>    data.** Mean `a_cue` at t32 is **0.03066** against uniform 1/32 = 0.03125; the cue is
+>    *below* its fair share on 61.9 % of fact events and its maximum over all 9,531 events is 0.1054.
+>    And `cand_n` is 32 on every row of every arm, so at TOPM 32 no selection occurs at all.
+> 3. **This is §89A's error class, re-committed on the same knob.** §89A's estimand was amended —
+>    after §87's lesson — to "the pair (P(served), E[e | served]) reported together, **never their
+>    product alone**", and §89A had a whole claim withdrawn in full for exactly this. `prereg/94_ladder.md`
+>    drops that amendment and the §94 table reports only the product; `E[e|served]` appears nowhere.
+> 4. **Three non-reproducing figures in a 40-line section.** "+0.0003" bpb corresponds to nothing —
+>    the deltas vs the §93 reference are +0.001302 / +0.004167 / +0.005440 / +0.001038 / +0.000734,
+>    and the likely provenance is |t32 − t16| mislabelled as a cost. The reference served `LA` **6.55**
+>    reproduces under no population (fact-only 6.877, all-kinds 6.520) and is repeated twice in prose
+>    and in the commit message. "The 6 newly-served neighbours" is 12 — TOPM 4 → 16 on a fixed pool of 32.
+> 5. **The served-`LA` column across the reach arms is a selection artifact.** `LA` is **bit-identical**
+>    on all 9,531 fact rows across ref / t16 / t32, so that column measures only how selective the
+>    top-M cut is, on one fixed set of cells; it cannot carry "the evidence gain rides on mixture
+>    arithmetic, not on the cue's own cell". For the **b-arms** it is real — there the cells differ
+>    and `LA` genuinely falls — so the section mixes two different things into one monotone column.
+> 6. **"§86.8's regime's fourth appearance, now on the scope axis"** mislabels its own experiment:
+>    every §94 arm holds `WSELSENT=0` and ladders table width and reach, not scope. It also
+>    contradicts §93's "the tension does NOT appear on the scope axis" two sections earlier.
+> 7. **No replicate and no noise floor exist on disk.** Seven distinct configs, no two alike. A
+>    uniform direction across five arms at +0.0007…+0.0054 is arithmetic, not evidence, at that size.
+> 8. **"Registered before any run (commit `d2f334c`)" is false** — `prereg/94_ladder.md` was first
+>    committed in `77f6f0b`, its own result commit. Filesystem mtimes support pre-registration
+>    (the five arms launched 40 s after the prereg was written); git does not.
+> 9. **The §95 directive built on "−0.052 + 0.033 + 0.020 ≈ 0" is void as arithmetic.** It sums a
+>    |T| = 4 delta, a |T| = 32 delta and a |T| = 4 absolute — three different estimands — and t32
+>    exhausts the service channel (`inT` = 1.000) through which b28 delivers +0.019 of its +0.033.
+>    §95 therefore tested the tag against de-collision, not the stack.
+>
+> **SA stands, and is the section's real result.** `b28` is clean on every statistic: `mean|e|` holds
+> at 0.8052 (|T| unchanged), `E[e|served]` improves −0.4726 → −0.1136, the sign-mean moves −0.0451 →
+> −0.0054, and the newly-served votes get monotonically less bad with table size (−1.11 / −0.64 /
+> −0.23). **De-collision is the only surviving fact-recall lever from §94**, which is what §95 was
+> registered to make affordable.
+
+
+
+---
+
+## 95. The tag buys de-collision's fact-vote repair for 1/60 of the memory — and the sign is still negative (`prereg/95_tag.md`, `WSELTAG=1 × WVBITS2`)
+
+**Registered before any run, and for the first time in this project the registration was committed
+ALONE** (`cfcb67f`), with no result in the same commit. The §92–§94 audit found that
+`prereg/93_scope.md` and `prereg/94_ladder.md` were each first committed *in their own result
+commit*, so §93's "Registered before any run (commit `8dc730b`)" and §94's "(commit `d2f334c`)"
+name commits that do not contain the file. Filesystem mtimes supported pre-registration in both
+cases; git did not. §95 fixes the process by committing earlier, not by asserting harder.
+
+### 95.1 Why this arm, and why a 2 × 2
+
+§94 laddered two levers under whole-stream scope and reported both as passing. The audit showed only
+one did. On §89A's own |T|-invariant sign-mean the **reach** ladder gets monotonically *worse*
+(−0.0451 → −0.3927 → −0.4271); at `t32` about 71 % of served cue votes still point the wrong way,
+no better than the reference, while per-served-event informativeness collapses 10.7×. §94's
+"+0.0201" was a still-wrong vote shrunk by the mixture denominator and multiplied by a service rate
+driven to 1.000 — the registration's *other* branch, "service without evidence", is the one the data
+fired. **De-collision** is the clean lever: `b28` holds `mean|e|` steady, improves the conditional
+4.2×, and lands the sign-mean at −0.0054. But it costs a 4.29 GB table.
+
+§89B established that an 8-bit tag with evict-on-mismatch reaches a 64× larger table's fact-level
+memory for a 4 MB tag array — under **sentence** scope, on `LA − LM`. §95 asks whether that transfers
+to whole-stream scope on the statistic §94 was overturned on, and answers it with a **complete 2 × 2**,
+two of whose cells already existed and were not re-run:
+
+| | tag OFF | tag ON |
+|---|---|---|
+| **b22** | `_93/scope0.json` | `s0_b22_tag` |
+| **b28** | `_94/s0_b28.json` | `s0_b28_tag` |
+
+The `b28 × tag` cell is what separates "the tag substitutes for de-collision" from "they stack".
+Reading a mechanism off a design that cannot separate those is the error this ledger has been
+corrected for six times (§89A, §90, §91, §92B, §93, §94).
+
+**Bit-identity gate: PASS, and more completely than the registration asked.** `WSELTAG=0` under
+`WSELSENT=0` reproduces `_93/scope0.json` on **every top-level key except `secs`** — all 34,788
+measure rows × 39 fields, all 11,437 calibration rows, `stats`, `meta`, `knobs`, and all three bpb
+values (`2.27521233466263`, `1.921132789757872`, `2.1874918828262095`).
+
+### 95.2 The result
+
+Fact-kind rows, §87's ADJ filter **on** (the registered protocol; §93 and §94 both silently ran with
+it off), n = 9,395. Primary = the |T|-invariant sign-mean, paired, two-level document bootstrap.
+`cand_n = 32` exactly on every row of every arm and `SEL_TOPM = 4` throughout, so |T| is matched and
+trap (2) is structurally excluded.
+
+| arm | P(srv) | E[sgn\|srv] | sign-mean | Δsign vs ref | bpb | evictions |
+|---|---|---|---|---|---|---|
+| ref `b22` tag-OFF | 0.1026 | −0.4627 | −0.0475 | — | 2.275212 | 0 |
+| **`b22` tag-ON** | 0.1541 | −0.0497 | −0.0077 | **+0.0398 [+0.0205, +0.0637]** | **2.266202** | 485,090,871 |
+| `b28` tag-OFF | 0.1542 | −0.0573 | −0.0088 | +0.0386 [+0.0200, +0.0635] | 2.280652 | 0 |
+| `b28` tag-ON | 0.1474 | +0.1235 | **+0.0182** | +0.0657 [+0.0321, +0.0983] | 2.287643 | 108,806,493 |
+
+**Branch 2 fires** (Δsign +0.0398 ≥ the registered +0.0199 half-bar; bpb −0.009011, a gain, against
+`b28`'s +0.005440 cost — both clauses are point estimates, no CI is registered). **Branch 7 fires.**
+**Branch 1 does not fire.** Branches 3, 4 and 8 do not, so the §6 reverse-course rule is not
+triggered. Branch 5 fires under the pre-named primary only and its gloss is refused (§95.5).
+
+*The branch-2 bar was derived from §1's table, which quotes the ADJ-**off** figures, while §3 makes
+ADJ-**on** the registered scale. Δsign clears both bars on both scales (+0.0398 against +0.0193
+ADJ-on; +0.0439 against +0.0199 ADJ-off), so the verdict is unaffected — but the sentence means the
+ADJ-on one.*
+
+### 95.3 What is licensed: not detectably different, at 1/60 of the memory
+
+At 2^22 the tag is **not detectably different** from de-collision at 2^28 on the registered
+statistic: +0.0398 against +0.0386, cross-arm paired difference **+0.0012 [−0.0151, +0.0163]**.
+
+**That is a failure to reject, not an equivalence.** The design resolves a difference of about
+0.016, i.e. 43 % of `b28`'s own gain, and the bootstrapped ratio of the two gains is **1.03
+[0.65, 1.59]** — the data are equally consistent with the tag delivering two thirds of de-collision's
+gain or half again as much. The point ordering (+0.0398 vs +0.0386) reverses under 3 of the 21
+single-document deletions and **is not an ordering**. Intervals are Monte-Carlo stable: at
+BOOT = 20,000 the headline is +0.0398 [+0.0208, +0.0634].
+
+The price is **71.3 MB of table — 67.1 MB of votes plus a 4.19 MB tag array — against 4,295 MB**, a
+ratio of **1/60**, which is §89B's own published figure. The 4 MB is the *increment*, not the table,
+and quoting it against `b28`'s total overstates the ratio ~17×.
+
+**The tag does not enlarge the address space.** `wstate.py:1213-1217` zeroes the previous owner and
+claims the cell: 57.8 % of all writes evict, 115.7 times per cell at 2^22 (against 0.405 at 2^28).
+It buys *disambiguation*, not capacity, and no "2^22 × 2^8 = 2^30" gloss is admissible.
+
+**And on §87's own cell-level estimand the repair is real and interval-backed.** Fixing the subset
+rule in advance — served **and** `match_first` in all four arms, n = 595 — the paired `LA − LM`
+change against the reference is **−0.5143 [−0.9447, −0.1438]** for `b22`+tag, **−0.5189
+[−1.1217, −0.0263]** for `b28`, and **−0.5700 [−0.9201, −0.2521]** for `b28`+tag. All three exclude
+zero; the reference's +0.2488 becomes −0.2655 / −0.2701 / −0.3212. Under the stricter rule that also
+pins `match_wid` (n = 386) the picture is unchanged. This reproduces §87's ladder (+0.290 at 2^22 →
+−0.121 at 2^28) in direction and exceeds it in size — **and the tag reaches it at 2^22.**
+
+### 95.4 The mechanism: same-row repair, not extra service
+
+This is the part §93 and §94 both got wrong, and it is checked here the way their audit said it must be.
+
+`e_first` is zero for unserved rows, so **the sign-mean is *exactly* `P(served) × E[sign|served]`**
+(max residual 8.7e-19). §89A's rule — report the pair, never the product — therefore applies to
+§95's own headline. The pair: P(served) 0.1026 → 0.1541, E[sign|served] −0.4627 → −0.0497, a
+difference on each arm's own served set of **+0.4129**, with the paired-on-both-served version
+**+0.3942 [+0.2166, +0.5603]**.
+
+Partitioned by row with no counterfactual and no decomposition ordering:
+
+| component | n | contribution |
+|---|---|---|
+| **served under both — same-row repair** | 761 | **+0.0319** |
+| de-served (the reference's worst votes, E[sgn] −0.8325) | 203 | +0.0180 |
+| newly served (net harmful, E[sgn] −0.1383) | 687 | −0.0101 |
+| **net service** | | **+0.0079** |
+
+**80 % of the headline is repair of votes the machine was already casting**, and it is genuine
+repair rather than abstention: on those 761 rows **234 wrong votes become right against 83 going the
+other way**, 2.82 : 1, while the tag's neutral reads net to −0.0026. The service change is a
+*reshuffle* — it drops the reference's worst-served rows and adds harmful ones — and nets slightly
+**positive**, +0.0079.
+
+This is the opposite of §93 (80 % of whose headline was a service-rate collapse) and of §94's
+**reach** ladder (service −0.2844 / −0.4152 against quality −0.0095 / +0.0026). It is **not** the
+opposite of §94's `b28` arm, the comparator in the table above, which decomposes the same way the
+tag does (service −0.0239, quality +0.0416) — exactly as the registration recorded when it called
+the saturation lever clean.
+
+*A multiplicative service/quality split of the sign-mean appears nowhere in the registration or the
+pre-written analysis script and is **post-hoc**. It is also path-dependent: its service term is
+−0.0238 / −0.0026 / −0.0132 across the three standard orderings, flips sign to +0.0055 for
+`b28`+tag, and leaves +0.0213 — 54 % of the headline — unattributed in an interaction. The row-level
+partition above needs no ordering and is what this section reports. An earlier draft of this section
+said "the service increase is a drag (−0.0238)"; that is **withdrawn** — the honest partition makes
+net service positive.*
+
+### 95.5 Three things this does not establish
+
+**The sign.** Branch 1 was registered on `b22_tag`, whose sign-mean is −0.0077 (ADJ on) and −0.0013
+(ADJ off) — negative in both, so it fails before any interval is consulted. `b28`+tag gives the
+**first positive point estimate in this project's history**, +0.0182, but that is not the cell the
+branch was written about, and under the registered primary its CI is **[−0.0078, +0.0433]**,
+including zero across all twelve seeds checked and at BOOT = 20,000. This must be stated with the
+alternatives on the table: **five of the eight estimator × ADJ combinations exclude zero upward**,
+including the registration's own named secondary (pid bootstrap, ADJ on: [+0.0056, +0.0310]).
+Naming the primary in advance is the only reason those five are unavailable, and quoting any of them
+would be cherry-picking. The estimate also leans on one document: leave-one-document-out moves it to
+as low as +0.0032, over 21 documents whose Kish effective number is **7.6** (the largest holds 26.5 %
+of the rows, the top three 53.1 %). **The handover's "§95 must demand the SIGN" is answered: no.**
+
+**That the two arms repair the same defect.** Branch 5's text fires under the primary
+(`b28`+tag − `b28` = +0.0270 [−0.0043, +0.0561]) but the registration's own named pid secondary
+excludes zero ([+0.0152, +0.0390]), which is branch 6. The point estimate is ~70 % of de-collision's
+entire gain, and the registration has no branch for "underpowered between 5 and 6". **Recorded as
+unresolved; the mechanism identity branch 5 pre-committed to a null is not claimed.** Two structural
+facts argue the arms differ: **30.5 % of `b22`+tag's served fact rows read a tag-mismatched cue cell
+as exactly 0.5** (`wstate.py:945`) against 3.3 % at `b28` — on those rows the statistic scores the
+dilution of the other three voters, not the cue's own recall — and on the 472 reference-wrong rows
+all three arms serve, the two repair ≈45 % each but agree on *which* only weakly (φ = +0.171, excess
+joint +0.0423 [+0.0027, +0.0855]). Served sets are not nested in either direction.
+
+**Anything about compression.** The bpb figure is reported under branch 7 and goes no further. §6 of
+the registration binds it: no branch licenses a claim about real text, the engine, or compression.
+
+### 95.6 The bpb move is an interaction, not a property of the tag
+
+`b22`+tag codes the 400 KB decontaminated slice at **2.266202 against the reference's 2.275212,
+−0.009011 bpb**, replicated in sign on the held-back calibration slice (−0.010482) and on train
+(−0.004336) — three slices, one direction, where every §94 arm *cost* bpb on both. The comparison is
+like-for-like: `clean_mask_det` is computed from the byte strings before the model exists, so every
+arm codes the same 3,276,800 bytes and averages over the same 170,459 scored bytes.
+
+**But the 2 × 2 shows no tag main effect.** At 2^28 the same tag *costs* **+0.006991**, and the
+tag × width interaction (**+0.016002**) is larger than either cell. Scope is part of the
+configuration too: §89B ran the identical arm, table and slice under **sentence** scope and measured
+the tag costing +0.000639 (ledger §89; the 2.278784 baseline is `_93/scope1.json` on disk). The gain
+belongs to (tag × whole-stream scope × 2^22), not to the tag.
+
+One plausible account is §86.8's regime story — whole-stream scope raises resident candidates at
+fact events from a **measured** 16.57 to exactly 32.00, a factor of **1.93**, roughly doubling the
+writes into the same 2^22 cells, so disambiguation is worth more there. That is a hypothesis about
+the mechanism, not a measurement of the bpb path.
+
+This is the **second** configuration in project history to move both axes at once; §89A's tagged
+`WSELTOPM = 32` was the first, and §89A's own correction 1 downgraded that to an interaction as well
+— §95 reproduces the downgrade on a different second factor (table width rather than selection
+width), which the registration's branch 7 anticipated in advance. Under sentence scope, §95's exact
+knob setting is §89A's *losing* cell (tagged TOPM = 4 codes 2.246269 against untagged 2.244060).
+
+**And this figure is a probe cross-entropy, not a verified code length.** `_factprobe.py` never runs
+a coder, and nothing in this repository round-trips `WSELTAG=1`. The gate proves determinism and
+that the tag short-circuits bit-identically when off; it proves nothing about the tagged path's
+decodability. No adoption question arises until it does — §80 governs, and this is not that.
+
+### 95.7 What the red-team took, and the standing pattern
+
+Four sentences were drafted before the red-team ran. It overturned three, and a fourth claim made in
+session notes:
+
+1. "reproduces the **entire** gain" — **withdrawn**; the interval admits [0.65, 1.59] of `b28`'s gain.
+2. "the tag **improves compression**" — **withdrawn** as a property of the tag; it is an interaction
+   that reverses at 2^28 and under sentence scope.
+3. "the service increase is a **drag** (−0.0238)" — **withdrawn**; one arbitrary decomposition
+   ordering. Net service is +0.0079, positive.
+4. "the instrument's gain is **seven times** §89B's engine gain, contradicting a committed result" —
+   **withdrawn as a unit error.** §89B's +0.001213 is bits per *bit*, i.e. +0.009704 bits per byte,
+   against the instrument's 0.009011 — a ratio of **1.08**. There was never an anomaly.
+
+**Method lesson, the seventh of its kind, and the first where the pattern held on a result of my
+own.** Across §87, §89A, §90, §91, §92B, §93 and §94 the red-teams never overturned an arithmetic
+figure and always overturned the sentence written on top of it. §95 is the same: every number in
+§95.2 reproduced digit for digit, and three of four interpretive sentences did not survive. The 2 × 2
+and the pre-named primary estimator are what made the survivors defensible — and the one claim that
+turned out to be a plain error was the one made *outside* the registered analysis.
 
 
 ---

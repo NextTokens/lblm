@@ -186,7 +186,7 @@ def prove():
     print("\nHONEST READ: order-0 entropy is blind (random==structured); the ENGINE separates them cleanly,")
     print("and reads RANDOM (AES-CTR/urandom/strong-gzip) at ~8 while pulling ECB/XOR/encoded/packed out as")
     print("structured. gzip is a strong cheap rival on literal-repeat structure; the engine is a finer,")
-    print("calibrated, byte-native detector (and one engine for ANY stream). Non-goal, stated: it cannot")
+    print("byte-native detector (and one engine for ANY stream). Non-goal, stated: it cannot")
     print("tell strong-compressed from encrypted (both ~random) and it flags STRUCTURE, not malice.")
     print("=" * 96)
 
