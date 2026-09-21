@@ -1,0 +1,45 @@
+wrote _cal/cal400.npz (8.4 MB)
+
+================================================================================================
+§92A CALIBRATION -- arm selleanu  train 400 KB  held-out 200 KB  scored 141441 bytes
+  bits measured 1,131,528   bpb 2.142899   base rate P(bit=1) 0.4400
+================================================================================================
+
+  binning                  ECE     floor  floor p95   ratio      MCE   verdict
+  uniform 10           0.00797   0.00055    0.00079   14.51  0.03411   14.5x floor - real
+  uniform 20           0.00797   0.00078    0.00102   10.26  0.03936   10.3x floor - real
+  quantile 10          0.00695   0.00038    0.00060   18.36  0.02730   18.4x floor - real
+  quantile 20          0.00778   0.00053    0.00076   14.77  0.03609   14.8x floor - real
+
+  REGISTERED HEADLINE (quantile, 10 bins): ECE 0.00695, floor 0.00038, ratio r = 18.36
+  Registered branch: r <= 1.2 and ECE < floor_p95 -> calibrated as far as this resolves
+  -> BRANCH 2/3: NOT calibrated. r = 18.36. Direction: OVERCONFIDENT (mean |p-0.5| exceeds mean |obs-0.5| by +0.00544); signed gap -0.00066
+
+  per-bin reliability table (quantile, 10 bins):
+    range                             n    mean p  observed       gap
+    [0.000000,0.000010]      113,153   0.00000   0.00004  +0.00003
+    [0.000010,0.000260]      113,153   0.00008   0.00028  +0.00020
+    [0.000260,0.003990]      113,153   0.00141   0.00209  +0.00068
+    [0.003990,0.045632]      113,152   0.01744   0.02068  +0.00324
+    [0.045632,0.271200]      113,153   0.13848   0.16578  +0.02730
+    [0.271200,0.657943]      113,153   0.45782   0.45023  -0.00759
+    [0.657943,0.933892]      113,152   0.82074   0.79566  -0.02508
+    [0.933892,0.993188]      113,153   0.97266   0.96746  -0.00520
+    [0.993188,0.999663]      113,153   0.99768   0.99749  -0.00019
+    [0.999663,1.000000]      113,153   0.99992   0.99991  -0.00001
+
+  Brier 0.058443 = reliability 0.000194 - resolution 0.187957 + uncertainty 0.246396
+
+  SELECTIVE PREDICTION (ledger 1352's statistic, at bit level) -- reported ALONGSIDE,
+  not as calibration. A monotone rise here is produced by any informative ordering.
+       tau   coverage   accuracy  mean conf  conf - acc
+      0.50     1.0000     0.9161     0.9236     +0.0075
+      0.60     0.9500     0.9358     0.9433     +0.0075
+      0.70     0.8979     0.9536     0.9603     +0.0067
+      0.80     0.8387     0.9700     0.9750     +0.0050
+      0.90     0.7582     0.9854     0.9879     +0.0025
+      0.95     0.6903     0.9926     0.9938     +0.0012
+      0.99     0.5515     0.9984     0.9986     +0.0003
+
+  Read the last column: if it is ~0 the confidence is honest at that threshold; if it
+  is positive the model is overconfident there, however monotone the accuracy column is.

@@ -1,0 +1,26 @@
+
+================================================================================================
+§92A SECONDARY -- the byte decision poc.py displays   n = 2,789 sampled bytes
+================================================================================================
+  top-1 accuracy 0.5973   mean P(top1) 0.6016   mean displayed P^(1/8) 0.9234
+
+  TRUE P(top1) as a forecast of 'top-1 is correct':
+    ECE 0.01778  floor 0.01783 (p95 0.02554)  ratio 1.00
+    range                        n    mean P  observed       gap
+    [0.00000,0.21061]     279   0.16127   0.15412  -0.00715
+    [0.21061,0.30024]     279   0.25431   0.23656  -0.01775
+    [0.30024,0.38916]     279   0.34358   0.34409  +0.00051
+    [0.38916,0.48563]     279   0.43428   0.40860  -0.02568
+    [0.48563,0.58918]     278   0.53675   0.51079  -0.02596
+    [0.58918,0.71821]     279   0.65218   0.69534  +0.04316
+    [0.71821,0.84551]     279   0.78620   0.77778  -0.00842
+    [0.84551,0.93271]     279   0.89351   0.91756  +0.02405
+    [0.93271,0.98269]     279   0.95936   0.93907  -0.02029
+    [0.98269,1.00000]     279   0.99408   0.98925  -0.00483
+
+  poc.py's gate, as shipped: COMMIT when displayed P^(1/8) >= 0.9
+    that is COMMIT when the true byte probability >= 0.4305
+    coverage 0.6515   accuracy-at-commit 0.7760
+    mean DISPLAYED confidence on committed bytes 0.9655
+    mean TRUE probability      on committed bytes 0.7763
+    -> the dashboard shows 0.9655 where the honest number is 0.7763 (overstated by +0.1892)

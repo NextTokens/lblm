@@ -58,9 +58,12 @@ class Live:
                     m.cur, m.phase, m.htail = cur, phase, ht
                     p, _ = m.predict()
                     pb = p if bit else 1.0 - p
+                    # htail is NOT advanced: wstate.py:1443 shifts it one BYTE at a time in
+                    # _byte_end, so it is frozen across all eight bits of the byte being coded.
+                    # Advancing it per bit corrupts the order-context keying on bits 1-7.
                     nxt.append((lp - math.log2(max(pb, 1e-9)),
                                 ((cur << 1) | bit) & 0xFF, phase + 1,
-                                ((ht << 1) | bit) & ((1 << 48) - 1), bits + [bit]))
+                                ht, bits + [bit]))
             nxt.sort(key=lambda x: x[0])
             beam = nxt[:width]
         m.cur, m.phase, m.htail = save

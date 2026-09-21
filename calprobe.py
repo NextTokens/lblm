@@ -4,8 +4,9 @@ REGISTRATION: prereg/92A_calibration.md, written before any number in this file 
 Read it first. The short version:
 
   Two live claims in this project assert calibration -- ledger line 1352 ("Confidence is
-  calibrated: accuracy@commit rises monotonically 0.57 -> 0.95") and poc.py:244 ("calibrated --
-  commits/abstains at a fixed tau, measurably monotone"). Both describe a SELECTIVE-PREDICTION
+  calibrated: accuracy@commit rises monotonically 0.57 -> 0.95") and, at the time of writing,
+  the poc.py dashboard ("calibrated -- commits/abstains at a fixed tau, measurably monotone";
+  the v2 rewrite has since dropped the word). Both describe a SELECTIVE-PREDICTION
   curve, which is monotone for any model with an informative confidence ORDERING, including one
   that is uniformly 2x overconfident. Calibration is the different property that among the bits
   assigned probability ~q, a 1 occurs with frequency ~q. Before this file, the repository
@@ -265,12 +266,15 @@ def selftest(train_kb=40):
         spec = 0.0
         for j in range(7, -1, -1):
             bit = (b >> j) & 1
-            p, _ = m2.predict()
-            spec += -math.log2(p if bit == 1 else 1.0 - p)
+            p4, _ = m2.predict()                # p4, not p: S3 below reads S2's captured p array
+            spec += -math.log2(p4 if bit == 1 else 1.0 - p4)
             m2.cur = ((m2.cur << 1) | bit) & 0xFF
             m2.phase += 1                       # htail deliberately NOT advanced
         m2.cur, m2.phase, m2.htail = save
-        real = sum(m2.step((b >> j) & 1, True) for j in range(7, -1, -1))
+        # learn=False: the speculative pass does not learn, so the comparator must not either.
+        # With learn=True the engine updates its weights after every bit and is a DIFFERENT
+        # predictor from bit 2 onward -- equality is then impossible and the gate can never pass.
+        real = sum(m2.step((b >> j) & 1, False) for j in range(7, -1, -1))
         worst4 = max(worst4, abs(spec - real))
     print(f"    400 bytes, max |speculative - real| = {worst4:.3e}   "
           f"{'PASS' if worst4 < 1e-9 else 'FAIL'}")
@@ -352,13 +356,14 @@ def report(d):
 # ----------------------------------------------------------------------------------------------------
 # the byte-level secondary -- what poc.py actually displays
 # ----------------------------------------------------------------------------------------------------
-def capture_bytes(arm, train_kb, stride=50, width=6, seed=0):
+def capture_bytes(arm, train_kb, stride=50, width=6, seed=0, nomask=False):
     """next-BYTE top-1 decision, at a deterministic stride over the same held-out slice.
 
-    poc.py:84 peek() thresholds `conf = 2 ** (sum log2 p_bit / 8)` -- the GEOMETRIC MEAN per bit,
-    i.e. P(byte) ** (1/8), not P(byte). Both are recorded here against the same event ("is top-1
-    the byte that actually came next"), because tau = 0.90 on the displayed quantity is tau = 0.9**8
-    = 0.4305 on the real one.
+    The poc.py dashboard USED to threshold `conf = 2 ** (sum log2 p_bit / 8)` -- the GEOMETRIC
+    MEAN per bit, i.e. P(byte) ** (1/8), not P(byte) -- so tau = 0.90 on the displayed quantity was
+    tau = 0.9**8 = 0.4305 on the real one. poc.py v2 displays 2**(-lp) and has no tau gate, so the
+    gate block below measures the SUPERSEDED behaviour; both quantities are still recorded here
+    against the same event ("is top-1 the byte that actually came next").
 
     The beam is width-limited, so P(top1) is a lower bound on the true argmax probability; that
     direction makes the overconfidence finding conservative, not generous.
@@ -367,7 +372,9 @@ def capture_bytes(arm, train_kb, stride=50, width=6, seed=0):
     test_all = open(os.path.join(HERE, "data/wt103_test.txt"), "rb").read()
     tr = train_all[:train_kb * 1024]
     te = test_all[:min(400 * 1024, train_kb * 1024 // 2)]
-    mask = W.clean_mask_det(tr, te, 13)
+    # AMENDMENT 1 applies to the secondary verbatim: clean_mask_det selects bytes by looking
+    # at the text being scored, so nomask=True scores every byte. Same branches, on ECE.
+    mask = bytearray([1]) * len(te) if nomask else W.clean_mask_det(tr, te, 13)
     m = W.Model(arm=arm, seed=seed)
     m.run(tr, learn=True)
 
@@ -384,7 +391,7 @@ def capture_bytes(arm, train_kb, stride=50, width=6, seed=0):
                         m.cur, m.phase = cur, phase
                         p, _ = m.predict()
                         pb = p if bit else 1.0 - p
-                        # htail is NOT advanced: wstate.py:1435 shifts it one BYTE at a time inside
+                        # htail is NOT advanced: wstate.py:1443 shifts it one BYTE at a time inside
                         # _byte_end, so it is frozen across all eight bits of the byte being coded.
                         # poc.py:peek() shifts it one BIT per bit and so corrupts the order-context
                         # keying on bits 1-7 of every speculative byte. S4 gates this.
@@ -455,7 +462,8 @@ if __name__ == "__main__":
         save(d, a[3])
         report(d)
     elif a[0] == "--bytes":
-        Pt, hit = capture_bytes(a[1], int(a[2]), int(a[3]) if len(a) > 3 else 50)
+        Pt, hit = capture_bytes(a[1], int(a[2]), int(a[3]) if len(a) > 3 else 50,
+                                nomask=(len(a) > 4 and a[4] == "nomask"))
         np.savez_compressed("_cal/bytes.npz", P=Pt, hit=hit)
         report_bytes(Pt, hit)
     elif a[0] == "--report":

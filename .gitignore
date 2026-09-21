@@ -80,3 +80,14 @@ gv_out/
 
 blmrs/target/
 !calprobe.py
+
+# §92-§94 result artifacts: the headline .log files are tracked so a clone can check
+# every ledger row; the raw captures (~310 MB of .npz/.json) are not.
+_cal/*.npz
+_cal/*.json
+_cal/*.err
+_cal/*.bak
+_cal/old/
+_cal/idcheck.py
+_93/*.json
+_94/*.json
