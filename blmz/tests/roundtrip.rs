@@ -101,7 +101,7 @@ fn corpus() -> Vec<(&'static str, Vec<u8>)> {
 #[test]
 fn roundtrip_corpus() {
     for (name, data) in corpus() {
-        let packed = compress(&data, &l1());
+        let packed = compress(&data, &l1()).unwrap();
         let back = decompress(&packed).unwrap_or_else(|e| panic!("{}: {}", name, e));
         assert_eq!(back, data, "{}", name);
     }
@@ -110,12 +110,12 @@ fn roundtrip_corpus() {
 #[test]
 fn compresses_what_it_should() {
     let t = text(40_000, 1);
-    let p = compress(&t, &l1());
+    let p = compress(&t, &l1()).unwrap();
     assert!(p.len() * 4 < t.len(), "text should compress >4x, got {} -> {}", t.len(), p.len());
     let z = vec![0u8; 20_000];
-    assert!(compress(&z, &l1()).len() < 120, "zeros should be nearly free");
+    assert!(compress(&z, &l1()).unwrap().len() < 120, "zeros should be nearly free");
     let r = random(20_000, 2);
-    let pr = compress(&r, &l1());
+    let pr = compress(&r, &l1()).unwrap();
     // incompressible data: bounded expansion (model overhead on random bytes is small)
     assert!(pr.len() < r.len() + r.len() / 50 + 64, "random expanded too much: {}", pr.len());
 }
@@ -124,7 +124,7 @@ fn compresses_what_it_should() {
 fn every_level_roundtrips() {
     let data = text(3_000, 9);
     for level in 1..=9 {
-        let p = compress(&data, &Options::level(level));
+        let p = compress(&data, &Options::level(level)).unwrap();
         assert_eq!(decompress(&p).unwrap(), data, "level {}", level);
         assert_eq!(blmz::read_header(&p[..]).unwrap().level, level);
     }
@@ -133,7 +133,7 @@ fn every_level_roundtrips() {
 #[test]
 fn streaming_matches_one_shot_and_handles_unknown_length() {
     let data = text(30_000, 5);
-    let one = compress(&data, &l1());
+    let one = compress(&data, &l1()).unwrap();
     let mut streamed = Vec::new();
     // tiny reads exercise chunk boundaries
     struct Trickle<'a>(&'a [u8]);
@@ -166,7 +166,7 @@ fn wrong_declared_length_is_an_error() {
 #[test]
 fn truncation_never_panics_and_always_errors() {
     let data = text(5_000, 11);
-    let p = compress(&data, &l1());
+    let p = compress(&data, &l1()).unwrap();
     for cut in (0..p.len()).step_by(37).chain([p.len() - 1, p.len() - 12, p.len() - 13]) {
         let r = decompress(&p[..cut]);
         assert!(r.is_err(), "truncated at {} of {} decoded successfully", cut, p.len());
@@ -176,7 +176,7 @@ fn truncation_never_panics_and_always_errors() {
 #[test]
 fn bit_flips_are_detected() {
     let data = text(5_000, 12);
-    let p = compress(&data, &l1());
+    let p = compress(&data, &l1()).unwrap();
     let mut s = 99u64;
     for _ in 0..200 {
         let mut q = p.clone();
@@ -190,7 +190,7 @@ fn bit_flips_are_detected() {
 
 #[test]
 fn trailing_garbage_and_concatenation_rejected() {
-    let p = compress(b"hello hello hello", &l1());
+    let p = compress(b"hello hello hello", &l1()).unwrap();
     let mut q = p.clone();
     q.push(0);
     assert!(matches!(decompress(&q), Err(Error::TrailingData)));
@@ -201,7 +201,7 @@ fn trailing_garbage_and_concatenation_rejected() {
 
 #[test]
 fn header_validation() {
-    let p = compress(b"abc", &l1());
+    let p = compress(b"abc", &l1()).unwrap();
     assert!(matches!(decompress(b"not a blz file at all"), Err(Error::NotBlz)));
     assert!(matches!(decompress(&[]), Err(Error::NotBlz)));
     let mut v = p.clone();
@@ -240,7 +240,7 @@ fn hostile_header_params_are_refused_before_allocating() {
 #[test]
 fn output_limit() {
     let data = vec![b'a'; 5000];
-    let p = compress(&data, &l1());
+    let p = compress(&data, &l1()).unwrap();
     let r = decompress_with_limits(
         &p,
         &Limits {
@@ -264,7 +264,7 @@ fn golden_streams() {
     ];
     let mut got = Vec::new();
     for (name, data, level) in cases.iter() {
-        let p = compress(data, &Options::level(*level));
+        let p = compress(data, &Options::level(*level)).unwrap();
         got.push(format!("{}:{}:{:08x}", name, p.len(), blmz::crc32::crc32(&p)));
         assert_eq!(&decompress(&p).unwrap(), data);
     }

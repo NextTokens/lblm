@@ -8,7 +8,7 @@
 //!
 //! ```no_run
 //! let data = std::fs::read("input").unwrap();
-//! let packed = blmz::compress(&data, &blmz::Options::default());
+//! let packed = blmz::compress(&data, &blmz::Options::default()).unwrap();
 //! let back = blmz::decompress(&packed).unwrap();
 //! assert_eq!(back, data);
 //! ```
@@ -225,9 +225,9 @@ impl Compressor {
     }
 }
 
-/// Compress `data` in memory.
-pub fn compress(data: &[u8], opts: &Options) -> Vec<u8> {
-    let (level, params) = opts.resolve().expect("invalid options");
+/// Compress `data` in memory. Fails only on invalid options.
+pub fn compress(data: &[u8], opts: &Options) -> Result<Vec<u8>, Error> {
+    let (level, params) = opts.resolve()?;
     let header = Header {
         version: VERSION,
         model_id: MODEL_ID,
@@ -240,7 +240,7 @@ pub fn compress(data: &[u8], opts: &Options) -> Vec<u8> {
     c.push(data);
     out.extend_from_slice(&c.take_output());
     out.extend_from_slice(&c.finish());
-    out
+    Ok(out)
 }
 
 /// Compress from a reader to a writer. `content_length`, if known, is recorded in the header

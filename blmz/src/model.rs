@@ -483,6 +483,8 @@ pub struct Model {
 }
 
 impl Model {
+    /// # Panics
+    /// If `params` fails `Params::validate` (check it first for untrusted values).
     pub fn new(params: Params) -> Model {
         params.validate().expect("invalid model parameters");
         let o = 1usize << params.obits;

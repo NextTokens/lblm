@@ -298,7 +298,7 @@ fn bench_file(cli: &Cli, input: &Path) -> Result<(), Box<dyn std::error::Error>>
     File::open(input)?.read_to_end(&mut data)?;
     let opts = blmz::Options::level(cli.level);
     let t0 = Instant::now();
-    let packed = blmz::compress(&data, &opts);
+    let packed = blmz::compress(&data, &opts)?;
     let tc = t0.elapsed().as_secs_f64();
     let t1 = Instant::now();
     let back = blmz::decompress_with_limits(&packed, &limits(cli))?;
