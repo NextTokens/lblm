@@ -1,9 +1,9 @@
 //! Parity probe: prints the probability-trace hash and ideal cost of the predictor on a file,
 //! in the same form as the research engine patched for parity (`phash`, `whole-stream`).
 //!
-//!   cargo run --release --features std-math --example trace -- <file> <byte_cap> <obits>
+//!   RUSTFLAGS="--cfg blmz_std_math" cargo run --release --example trace -- <file> <byte_cap> <obits>
 //!
-//! With `std-math` the model uses the platform libm exactly like blmrs/src/bin/strong.rs, so the
+//! With `blmz_std_math` the model uses the platform libm exactly like blmrs/src/bin/strong.rs, so the
 //! hash must equal the research engine's on the same machine. Without it, the portable math is
 //! used and the cost should differ only in the ~6th decimal.
 fn main() {

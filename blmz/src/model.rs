@@ -80,6 +80,7 @@ pub struct Params {
     /// selector usefulness cells: 2^selubits (strong.rs SELUBITS = 23)
     pub selubits: u8,
     /// history window: 2^window_log bytes. Identical to strong.rs for inputs <= the window.
+    /// At most 32: match positions are stored in 32 bits, so a longer window could not be used.
     pub window_log: u8,
 }
 
@@ -100,7 +101,7 @@ impl Params {
     pub const MIN_BITS: u8 = 10;
     pub const MAX_BITS: u8 = 30;
     pub const MIN_WINDOW: u8 = 16;
-    pub const MAX_WINDOW: u8 = 40;
+    pub const MAX_WINDOW: u8 = 32;
 
     /// Reject anything a hostile header could use to make us allocate absurd memory or overflow
     /// shifts. (Memory limits on top of this are the caller's policy: see `memory_bytes`.)
@@ -126,18 +127,32 @@ impl Params {
                 Self::MAX_WINDOW
             ));
         }
-        if usize::BITS < 64 && (self.obits.max(self.selvbits) as u32 + 4 >= usize::BITS) {
-            return Err("table sizes too large for this platform's address space".into());
+        // the tables must be addressable on this platform (32-bit targets). The history window is
+        // bounded by the content length and grown fallibly, and every allocation is fallible, so
+        // anything that passes here and still does not fit becomes Error::OutOfMemory.
+        if self.memory_bytes() > isize::MAX as u64 {
+            return Err("tables exceed this platform's address space".into());
         }
         Ok(())
     }
 
-    /// Model memory in bytes (tables + mixers), excluding the history window, which grows with
-    /// the input up to 2^window_log bytes.
+    /// Bytes of history the model keeps for a stream of `content_length` bytes (unknown: the
+    /// whole window).
+    pub fn history_bytes(&self, content_length: Option<u64>) -> u64 {
+        let w = 1u64 << self.window_log;
+        content_length.map_or(w, |n| n.min(w))
+    }
+
+    /// Peak memory for coding a stream: tables + history (+ small fixed buffers).
+    pub fn total_memory(&self, content_length: Option<u64>) -> u64 {
+        self.memory_bytes() + self.history_bytes(content_length)
+    }
+
+    /// Model table memory in bytes (tables + mixers), excluding the history window, which grows
+    /// with the input up to 2^window_log bytes (see `total_memory`).
     pub fn memory_bytes(&self) -> u64 {
         let o = 1u64 << self.obits;
-        let order_like = (NM + NSP + 2) as u64 * o * 3; // tag + n0 + n1 (u8)
-        let icm = NICM as u64 * o;
+        let order_like = NM as u64 * o * 4 + (NSP + 2) as u64 * o * 3; // [tag n0 n1 icm] / [tag n0 n1]
         let high = NH as u64 * (2u64 << self.hbits);
         let mm = 2 * 4 * (1u64 << self.mbits);
         let pv = (1u64 << self.sbits) * (8 * PVD as u64 + 8);
@@ -145,13 +160,54 @@ impl Params {
         let selu = (1u64 << self.selubits) * 8;
         let mixers = (NSEL + NSEL2 + 1) as u64 * NW as u64 * 16;
         let apm = (2048 + 1024 + 2048 + 256 + 4096 + 4096) as u64 * 33 * 8;
-        order_like + icm + high + mm + pv + selv + selu + mixers + apm
+        order_like + high + mm + pv + selv + selu + mixers + apm
     }
 }
 
 /// A count slot: [8-bit checksum tag, n0, n1]; counts saturate by halving (always <= 254 at rest).
-/// A plain byte array (not a struct) so `vec![[0; 3]; n]` gets lazily-zeroed pages from the OS.
 type Slot = [u8; 3];
+/// An order slot: [tag, n0, n1, ICM bit history]. strong.rs keeps the indirect models' history in
+/// separate tables indexed by the same slot and reset with it; one 4-byte slot is the same state
+/// with one cache miss instead of two.
+type OSlot = [u8; 4];
+
+/// Allocation failed (the request did not fit the address space or the allocator refused it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AllocError {
+    pub bytes: u64,
+}
+
+/// Types whose all-zero bit pattern is a valid value.
+///
+/// # Safety
+/// Implement only for types where every field is an integer or float (all-zero = 0 / +0.0).
+unsafe trait Zeroable: Copy {}
+unsafe impl Zeroable for u8 {}
+unsafe impl Zeroable for u32 {}
+unsafe impl Zeroable for u64 {}
+unsafe impl Zeroable for f64 {}
+unsafe impl<T: Zeroable, const N: usize> Zeroable for [T; N] {}
+
+/// A zero-filled Vec of `n` elements that reports allocation failure instead of aborting the
+/// process, and gets lazily-zeroed pages from the OS (calloc) so untouched table pages cost no RSS.
+fn zeroed<T: Zeroable>(n: usize) -> Result<Vec<T>, AllocError> {
+    let bytes = (n as u64).saturating_mul(std::mem::size_of::<T>() as u64);
+    if n == 0 || std::mem::size_of::<T>() == 0 {
+        return Ok(Vec::new());
+    }
+    let layout = std::alloc::Layout::array::<T>(n).map_err(|_| AllocError { bytes })?;
+    // SAFETY: the layout has non-zero size (n > 0, T is not zero-sized); alloc_zeroed returns
+    // either null (handled) or a block of `n` zeroed T, valid values by the Zeroable contract;
+    // Vec::from_raw_parts gets the global allocator's pointer with capacity == length == n and the
+    // exact layout it was allocated with.
+    unsafe {
+        let ptr = std::alloc::alloc_zeroed(layout) as *mut T;
+        if ptr.is_null() {
+            return Err(AllocError { bytes });
+        }
+        Ok(Vec::from_raw_parts(ptr, n, n))
+    }
+}
 
 /// strong.rs count bump on a pair [n0, n1]: c[y] += 1; if c[y] >= CLIMIT { both = (c + 1) >> 1 }.
 #[inline]
@@ -166,7 +222,7 @@ fn bump_pair(c: &mut [u8; 2], y: usize) {
 }
 
 #[inline]
-fn bump(s: &mut Slot, y: usize) {
+fn bump(s: &mut [u8], y: usize) {
     let mut c = [s[1], s[2]];
     bump_pair(&mut c, y);
     s[1] = c[0];
@@ -175,7 +231,7 @@ fn bump(s: &mut Slot, y: usize) {
 
 /// ledger §79 PAQ nonstationary rule on the opposite count: if n_{1-y} > 2, n_{1-y} = n/2 + 1.
 #[inline]
-fn ns_discount(s: &mut Slot, y: usize) {
+fn ns_discount(s: &mut [u8], y: usize) {
     let o = 2 - y; // y=1 -> n0 at [1]; y=0 -> n1 at [2]
     if s[o] > 2 {
         s[o] = s[o] / 2 + 1;
@@ -304,29 +360,43 @@ struct History {
     buf: Vec<u8>,
     mask: u64,
     cap: u64,
+    /// growth failed; the codec checks `Model::alloc_failed` and stops with an error
+    failed: bool,
 }
 
 impl History {
-    fn new(window_log: u8) -> Self {
+    fn new(window_log: u8, expected: Option<u64>) -> Result<Self, AllocError> {
         let cap = 1u64 << window_log;
-        History {
-            buf: Vec::new(),
+        let mut buf = Vec::new();
+        let want = expected.map_or(0, |n| n.min(cap)).min(1 << 30);
+        buf.try_reserve_exact(want as usize).map_err(|_| AllocError { bytes: want })?;
+        Ok(History {
+            buf,
             mask: cap - 1,
             cap,
-        }
+            failed: false,
+        })
     }
     #[inline]
     fn push(&mut self, pos: u64, b: u8) {
         if (self.buf.len() as u64) < self.cap {
+            if self.buf.len() == self.buf.capacity() {
+                let room = (self.cap - self.buf.len() as u64).min(self.buf.len().max(1 << 16) as u64);
+                if self.buf.try_reserve_exact(room as usize).is_err() {
+                    self.failed = true;
+                    return;
+                }
+            }
             self.buf.push(b);
         } else {
             self.buf[(pos & self.mask) as usize] = b;
         }
     }
-    /// byte at absolute position `pos` (caller guarantees cur - pos <= cap)
+    /// Byte at absolute position `pos`, which must be one of the last `cap` bytes pushed.
+    /// (After a failed growth, missing bytes read as 0; the stream is aborted anyway.)
     #[inline]
     fn at(&self, pos: u64) -> u8 {
-        self.buf[(pos & self.mask) as usize]
+        self.buf.get((pos & self.mask) as usize).copied().unwrap_or(0)
     }
     #[inline]
     fn in_window(&self, pos: u64, byte_pos: u64) -> bool {
@@ -344,15 +414,15 @@ struct MatchModel {
 }
 
 impl MatchModel {
-    fn new(hash_bits: u8, minlen: u64) -> Self {
-        MatchModel {
-            tab: vec![0u32; 1usize << hash_bits],
+    fn new(hash_bits: u8, minlen: u64) -> Result<Self, AllocError> {
+        Ok(MatchModel {
+            tab: zeroed(1usize << hash_bits)?,
             mask: (1u64 << hash_bits) - 1,
             minlen,
             ptr: 0,
             len: 0,
             h: 0,
-        }
+        })
     }
 
     #[inline]
@@ -369,10 +439,11 @@ impl MatchModel {
         }
     }
 
-    /// Called after byte `byte_pos` (now in `hist`) is known.
-    fn update_after_byte(&mut self, hist: &History, byte_pos: u64) {
+    /// Called when byte `b` at position `byte_pos` is known, BEFORE it is pushed into `hist`:
+    /// a match pointer exactly one window back must still see its own byte, not `b`.
+    fn update_after_byte(&mut self, hist: &History, byte_pos: u64, b: u8) {
         if self.len > 0 && self.ptr < byte_pos {
-            if hist.at(self.ptr) == hist.at(byte_pos) {
+            if hist.at(self.ptr) == b {
                 self.ptr += 1;
                 self.len = (self.len + 1).min(65535);
             } else {
@@ -380,8 +451,7 @@ impl MatchModel {
                 self.ptr = 0;
             }
         }
-        let b = hist.at(byte_pos) as u64;
-        self.h = ((self.h << 8) | b) & 0xFFFF_FFFF_FFFF;
+        self.h = ((self.h << 8) | b as u64) & 0xFFFF_FFFF_FFFF;
         if byte_pos + 1 >= self.minlen {
             let hk = (self.h.wrapping_mul(2654435761) & self.mask) as usize;
             // strong.rs stores (byte_pos + 1) as u32; recover the absolute position (inputs > 4 GiB)
@@ -393,7 +463,8 @@ impl MatchModel {
                 if prev > here {
                     prev = prev.wrapping_sub(1u64 << 32);
                 }
-                // strong.rs: prev <= byte_pos (and the byte must still be in the window)
+                // strong.rs: prev <= byte_pos (and prev must stay readable for the whole match:
+                // its distance byte_pos + 1 - prev stays constant while the match lasts)
                 if prev <= byte_pos && prev != 0 && hist.in_window(prev, byte_pos + 1) {
                     self.ptr = prev;
                     self.len = self.minlen as usize;
@@ -408,12 +479,11 @@ pub struct Model {
     params: Params,
     st: &'static [f64],
     // flat count tables
-    ord: Vec<Vec<Slot>>,      // NM x 2^obits
+    ord: Vec<Vec<OSlot>>,     // NM x 2^obits (orders 2..6 also carry the ICM bit history)
     sp: Vec<Vec<Slot>>,       // NSP x 2^obits
     wd: Vec<Slot>,            // word
     wd2: Vec<Slot>,           // previous word
     high: Vec<Vec<[u8; 2]>>,  // NH x 2^hbits (no tags)
-    icm_bh: Vec<Vec<u8>>,     // NICM x 2^obits bit-history bytes
     sm_p: [[f64; 256]; NICM], // StateMaps
     sm_n: [[u32; 256]; NICM],
     // mixers
@@ -469,7 +539,6 @@ pub struct Model {
     wd2_slot: usize,
     hslot: [usize; NH],
     icm_bv: [usize; NICM],
-    icm_ti: [usize; NICM],
     sel: usize,
     sel2: usize,
     p_sel: f64,
@@ -480,13 +549,25 @@ pub struct Model {
     ssel2: f64,
     sg: f64,
     pending: bool,
+    last_p: f64,
 }
 
 impl Model {
     /// # Panics
-    /// If `params` fails `Params::validate` (check it first for untrusted values).
+    /// If `params` fails `Params::validate` or the tables cannot be allocated. Use `try_new` for
+    /// parameters from untrusted input.
     pub fn new(params: Params) -> Model {
-        params.validate().expect("invalid model parameters");
+        Self::try_new(params, None).expect("blmz model allocation")
+    }
+
+    /// Allocate a model. `expected_len`, when known, pre-sizes the history buffer.
+    /// Errors (instead of aborting) when the tables do not fit in memory.
+    pub fn try_new(params: Params, expected_len: Option<u64>) -> Result<Model, AllocError> {
+        if params.validate().is_err() {
+            return Err(AllocError {
+                bytes: params.total_memory(expected_len),
+            });
+        }
         let o = 1usize << params.obits;
         let apm = [
             Apm::new(256 * 8, 0.007),
@@ -496,33 +577,33 @@ impl Model {
             Apm::new(4096, 0.005),
             Apm::new(4096, 0.005),
         ];
-        Model {
+        let tables = |n: usize, k: usize| -> Result<Vec<Vec<Slot>>, AllocError> { (0..k).map(|_| zeroed(n)).collect() };
+        Ok(Model {
             params,
             st: stretch_table(),
-            ord: (0..NM).map(|_| vec![[0u8; 3]; o]).collect(),
-            sp: (0..NSP).map(|_| vec![[0u8; 3]; o]).collect(),
-            wd: vec![[0u8; 3]; o],
-            wd2: vec![[0u8; 3]; o],
-            high: (0..NH).map(|_| vec![[0u8; 2]; 1usize << params.hbits]).collect(),
-            icm_bh: (0..NICM).map(|_| vec![0u8; o]).collect(),
+            ord: (0..NM).map(|_| zeroed(o)).collect::<Result<_, _>>()?,
+            sp: tables(o, NSP)?,
+            wd: zeroed(o)?,
+            wd2: zeroed(o)?,
+            high: (0..NH).map(|_| zeroed(1usize << params.hbits)).collect::<Result<_, _>>()?,
             sm_p: [[0.5f64; 256]; NICM],
             sm_n: [[0u32; 256]; NICM],
-            mixers: vec![[0.0f64; NW]; NSEL],
-            mixers_g: vec![[0.0f64; NW]; NSEL],
-            mixers2: vec![[0.0f64; NW]; NSEL2],
-            mixers2_g: vec![[0.0f64; NW]; NSEL2],
+            mixers: zeroed(NSEL)?,
+            mixers_g: zeroed(NSEL)?,
+            mixers2: zeroed(NSEL2)?,
+            mixers2_g: zeroed(NSEL2)?,
             gmix: [0.0; NW],
             gmix_g: [0.0; NW],
             final_w: [0.3, 0.3, 0.2, 0.0],
             final_g: [0.0; 4],
             apm,
-            mm: MatchModel::new(params.mbits, 5),
-            mm2: MatchModel::new(params.mbits, 8),
-            hist: History::new(params.window_log),
+            mm: MatchModel::new(params.mbits, 5)?,
+            mm2: MatchModel::new(params.mbits, 8)?,
+            hist: History::new(params.window_log, expected_len)?,
             sl2: [0; SELSMAX],
-            selvt: vec![[0.0f64; 2]; 1usize << params.selvbits],
-            selvtg: vec![0u8; 1usize << params.selvbits],
-            selut: vec![0.0f64; 1usize << params.selubits],
+            selvt: zeroed(1usize << params.selvbits)?,
+            selvtg: zeroed(1usize << params.selvbits)?,
+            selut: zeroed(1usize << params.selubits)?,
             sel_nc: 0,
             sel_gk: 0,
             sel_t: [0; SEL_TOPM],
@@ -533,8 +614,8 @@ impl Model {
             sel_ll: [0.0; SELSMAX],
             sel_uw: 0.0,
             sel_active: false,
-            pv_tab: vec![[0.0f64; PVD]; 1usize << params.sbits],
-            pv_tag: vec![0u64; 1usize << params.sbits],
+            pv_tab: zeroed(1usize << params.sbits)?,
+            pv_tag: zeroed(1usize << params.sbits)?,
             pv_id: 0,
             pv_ti: 0,
             pv_feat: [0.0; PVD],
@@ -555,7 +636,6 @@ impl Model {
             wd2_slot: 0,
             hslot: [0; NH],
             icm_bv: [0; NICM],
-            icm_ti: [0; NICM],
             sel: 0,
             sel2: 0,
             p_sel: 0.5,
@@ -566,7 +646,13 @@ impl Model {
             ssel2: 0.0,
             sg: 0.0,
             pending: false,
-        }
+            last_p: 0.5,
+        })
+    }
+
+    /// True once growing the history buffer has failed; the stream must be abandoned.
+    pub fn alloc_failed(&self) -> bool {
+        self.hist.failed
     }
 
     pub fn params(&self) -> Params {
@@ -589,9 +675,6 @@ impl Model {
             let key = (((1u64 << (8 * l + phase)) | ((self.htail & m) << phase) | cur) << 3) | phase as u64;
             let ti = self.slot_index(key).0;
             prefetch(&self.ord[k][ti]);
-            if (2..=6).contains(&k) {
-                prefetch(&self.icm_bh[k - 2][ti]);
-            }
         }
         let hmask = (1u64 << self.params.hbits) - 1;
         for hk in 0..NH {
@@ -636,14 +719,17 @@ impl Model {
 
     /// Probability that the next bit is 1, in [1e-6, 1 - 1e-6] (NaN-free by construction of the
     /// clamps; the coder still sanitises).
+    /// Idempotent until the next `update`: calling it twice returns the same value and does not
+    /// touch the model again (a second evaluation would mutate tables and desync a decoder).
     pub fn p(&mut self) -> f64 {
-        debug_assert!(!self.pending, "p() called twice without update()");
+        if self.pending {
+            return self.last_p;
+        }
         self.pending = true;
         let phase = self.phase;
         let cur = self.cur;
         let prefix = cur;
         let bp = self.byte_pos;
-        let mut oreset = [false; NM];
 
         // byte-aware orders 0..7
         let maskb = |l: usize| -> u64 {
@@ -659,9 +745,8 @@ impl Model {
             let key = (((1u64 << (8 * l + phase)) | run_) << 3) | (phase as u64);
             let (ti, want) = self.slot_index(key);
             let s = &mut self.ord[k][ti];
-            oreset[k] = s[0] != want;
-            if oreset[k] {
-                *s = [want, 0, 0];
+            if s[0] != want {
+                *s = [want, 0, 0, 0]; // also resets the ICM history (strong.rs: oreset -> icm_bh = 0)
             }
             self.oslot[k] = ti;
             self.sts[k] = st_count(self.st, s[1], s[2]);
@@ -720,12 +805,8 @@ impl Model {
         // indirect models
         for c in 0..NICM {
             let ti = self.oslot[ICM_K[c]];
-            if oreset[ICM_K[c]] {
-                self.icm_bh[c][ti] = 0;
-            }
-            let bv = self.icm_bh[c][ti] as usize;
+            let bv = self.ord[ICM_K[c]][ti][3] as usize;
             self.icm_bv[c] = bv;
-            self.icm_ti[c] = ti;
             self.sts[NM + NH + NSP + 4 + c] = stretch(self.sm_p[c][bv]);
         }
         // prefix vector (BLPVEC=2)
@@ -802,12 +883,16 @@ impl Model {
         p = 0.3 * p + 0.7 * pe0;
         let pf0 = self.apm[5].refine(p, ((((self.htail ^ (self.htail >> 13)) & 511) << 3) | ph) as usize);
         p = 0.3 * p + 0.7 * pf0;
-        p.clamp(1e-6, 1.0 - 1e-6)
+        self.last_p = p.clamp(1e-6, 1.0 - 1e-6);
+        self.last_p
     }
 
-    /// Learn from the actual bit (0 or 1). Must follow exactly one `p()`.
+    /// Learn from the actual bit (0 or 1). Calls `p()` first if it has not been called for this
+    /// bit, so the update always uses the predictions an encoder/decoder pair would have seen.
     pub fn update(&mut self, y: u32) {
-        debug_assert!(self.pending, "update() without p()");
+        if !self.pending {
+            self.p();
+        }
         self.pending = false;
         let y = (y & 1) as usize;
         let yf = y as f64;
@@ -869,7 +954,7 @@ impl Model {
             if self.sm_n[c][bv] < 1023 {
                 self.sm_n[c][bv] += 1;
             }
-            self.icm_bh[c][self.icm_ti[c]] = (((bv << 1) | y) & 0xFF) as u8;
+            self.ord[ICM_K[c]][self.oslot[ICM_K[c]]][3] = (((bv << 1) | y) & 0xFF) as u8;
         }
         for j in 0..NSP {
             let s = &mut self.sp[j][self.sp_slot[j]];
@@ -911,9 +996,9 @@ impl Model {
         }
         let b = (self.cur & 0xFF) as u8;
         let bp = self.byte_pos;
+        self.mm.update_after_byte(&self.hist, bp, b);
+        self.mm2.update_after_byte(&self.hist, bp, b);
         self.hist.push(bp, b);
-        self.mm.update_after_byte(&self.hist, bp);
-        self.mm2.update_after_byte(&self.hist, bp);
         self.htail = ((self.htail << 8) | b as u64) & ((1u64 << (8 * MAXB)) - 1);
 
         // selector usefulness for the byte just served
@@ -1064,7 +1149,12 @@ fn prefetch<T>(r: &T) {
     unsafe {
         std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(r as *const T as *const i8);
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: PRFM is a hint; it never faults and does not read architectural state.
+    unsafe {
+        std::arch::asm!("prfm pldl1keep, [{0}]", in(reg) r as *const T, options(nostack, preserves_flags, readonly));
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     let _ = r;
 }
 

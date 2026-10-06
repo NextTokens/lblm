@@ -225,14 +225,9 @@ fn hostile_header_params_are_refused_before_allocating() {
     h.params.obits = 30;
     h.params.selvbits = 30;
     let bytes = h.to_bytes();
-    let r = decompress_with_limits(
-        &bytes,
-        &Limits {
-            max_memory: 1 << 30,
-            max_output: u64::MAX,
-        },
-    );
-    assert!(matches!(r, Err(Error::MemoryLimit { .. })), "{:?}", r.err());
+    let r = decompress_with_limits(&bytes, &Limits::default().max_memory(1 << 30));
+    // 64-bit: over the memory limit; 32-bit: does not even fit the address space
+    assert!(matches!(r, Err(Error::MemoryLimit { .. } | Error::BadParams(_))), "{:?}", r.err());
     h.params.obits = 31;
     assert!(matches!(decompress(&h.to_bytes()), Err(Error::BadParams(_))));
 }
@@ -241,19 +236,199 @@ fn hostile_header_params_are_refused_before_allocating() {
 fn output_limit() {
     let data = vec![b'a'; 5000];
     let p = compress(&data, &l1()).unwrap();
-    let r = decompress_with_limits(
-        &p,
-        &Limits {
-            max_output: 100,
-            ..Default::default()
-        },
-    );
+    let r = decompress_with_limits(&p, &Limits::default().max_output(100));
     assert!(matches!(r, Err(Error::OutputLimit(100))));
 }
 
-/// Format stability + cross-platform determinism: these exact bytes must come out on every OS and
-/// CPU. If this fails after an intentional model/format change, bump MODEL_ID/VERSION and re-pin;
-/// if it fails on one platform only, decoding is not portable there — a release blocker.
+fn tiny(window_log: u8) -> blmz::Params {
+    blmz::Params {
+        obits: 12,
+        hbits: 12,
+        mbits: 16,
+        sbits: 10,
+        selvbits: 12,
+        selubits: 12,
+        window_log,
+    }
+}
+
+/// A header with no declared length followed by zero bytes decodes to long runs of 0xFF without
+/// ever reaching end of stream (the "bomb" shape): max_output must stop it promptly.
+#[test]
+fn zero_payload_is_bounded_by_max_output() {
+    let h = blmz::format::Header {
+        version: blmz::format::VERSION,
+        model_id: blmz::format::MODEL_ID,
+        level: 0,
+        params: tiny(16),
+        content_length: None,
+    };
+    let mut bomb = h.to_bytes();
+    bomb.extend_from_slice(&[0u8; 64]);
+    let t = std::time::Instant::now();
+    let r = decompress_with_limits(&bomb, &Limits::default().max_output(20_000));
+    assert!(matches!(r, Err(Error::OutputLimit(20_000) | Error::Truncated)), "{:?}", r.err());
+    assert!(t.elapsed().as_secs() < 30);
+}
+
+/// The history window counts against max_memory: tiny tables but a 4 GiB window and no length.
+#[test]
+fn memory_limit_counts_the_history_window() {
+    let p = tiny(32);
+    assert!(p.memory_bytes() < 64 << 20);
+    assert_eq!(p.total_memory(None), p.memory_bytes() + (1 << 32));
+    assert_eq!(p.total_memory(Some(1000)), p.memory_bytes() + 1000);
+    let h = blmz::format::Header {
+        version: blmz::format::VERSION,
+        model_id: blmz::format::MODEL_ID,
+        level: 0,
+        params: p,
+        content_length: None,
+    };
+    let r = decompress_with_limits(&h.to_bytes(), &Limits::default().max_memory(1 << 30));
+    assert!(matches!(r, Err(Error::MemoryLimit { .. } | Error::BadParams(_))), "{:?}", r.err());
+}
+
+/// Inputs longer than the history window: a near-duplicate exactly one window (2^16) back must
+/// neither break the round trip nor lock the match model onto its own freshly written byte.
+#[test]
+fn window_wrap_with_match_at_exactly_the_window_distance() {
+    // random bytes: the ONLY repeats are the copy exactly one window back (text would give the
+    // match model nearer candidates and hide the defect)
+    let a = random(1 << 16, 77);
+    let mut data = a.clone();
+    let mut b = a.clone();
+    b.remove(30_000); // copy with one byte deleted: the match drops out of sync there
+    data.extend_from_slice(&b);
+    data.extend_from_slice(&text(20_000, 78));
+    let small = compress(&data, &Options::with_params(tiny(16))).unwrap();
+    let big = compress(&data, &Options::with_params(tiny(17))).unwrap();
+    assert_eq!(decompress(&small).unwrap(), data);
+    assert_eq!(decompress(&big).unwrap(), data);
+    // the 2^16 window sees the copy at distance 2^16 - 0 / -1; it must compress about as well as
+    // a window that holds everything (the defect cost +44% here)
+    assert!(
+        small.len() * 100 < big.len() * 105,
+        "window 16: {} bytes, window 17: {} bytes",
+        small.len(),
+        big.len()
+    );
+}
+
+#[test]
+fn decompress_one_leaves_the_reader_after_the_stream() {
+    let a = compress(b"first stream", &l1()).unwrap();
+    let b = compress(b"second", &l1()).unwrap();
+    let mut all = a.clone();
+    all.extend_from_slice(&b);
+    all.extend_from_slice(b"XYZ");
+    let mut r = &all[..];
+    let mut out = Vec::new();
+    blmz::decompress_one(&mut r, &mut out, &Limits::default()).unwrap();
+    assert_eq!(out, b"first stream");
+    out.clear();
+    blmz::decompress_one(&mut r, &mut out, &Limits::default()).unwrap();
+    assert_eq!(out, b"second");
+    assert_eq!(r, b"XYZ");
+}
+
+#[test]
+fn io_errors_are_reported_as_io_errors() {
+    struct Failing<'a>(&'a [u8]);
+    impl std::io::Read for Failing<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.0.is_empty() {
+                return Err(std::io::Error::other("disk on fire"));
+            }
+            let n = buf.len().min(self.0.len());
+            buf[..n].copy_from_slice(&self.0[..n]);
+            self.0 = &self.0[n..];
+            Ok(n)
+        }
+    }
+    let p = compress(&text(5_000, 5), &l1()).unwrap();
+    let r = decompress_stream(Failing(&p[..p.len() / 2]), std::io::sink(), &Limits::default());
+    assert!(
+        matches!(r, Err(Error::Io(ref e)) if e.to_string().contains("disk on fire")),
+        "{:?}",
+        r.err()
+    );
+}
+
+#[test]
+fn model_p_is_idempotent_and_update_is_safe_alone() {
+    let mut a = blmz::Model::new(tiny(16));
+    let mut b = blmz::Model::new(tiny(16));
+    for &byte in b"hello world, hello model" {
+        for i in (0..8).rev() {
+            let bit = ((byte >> i) & 1) as u32;
+            let p1 = a.p();
+            assert_eq!(p1.to_bits(), a.p().to_bits(), "second p() must not re-evaluate");
+            a.update(bit);
+            b.update(bit); // without p(): must behave as if p() had been called
+        }
+    }
+    assert_eq!(a.p().to_bits(), b.p().to_bits());
+}
+
+/// Streams written by earlier builds (tests/fixtures) must decode forever, bit-exactly.
+/// Never regenerate or edit these files: a model or format change adds NEW fixtures.
+#[test]
+#[cfg_attr(blmz_std_math, ignore)]
+fn fixtures_decode_forever() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for (name, content) in fixture_contents() {
+        let packed = std::fs::read(dir.join(name)).unwrap_or_else(|e| panic!("{}: {}", name, e));
+        let back = decompress(&packed).unwrap_or_else(|e| panic!("{}: {}", name, e));
+        assert_eq!(back, content, "{} decoded to different bytes", name);
+    }
+}
+
+fn fixture_contents() -> Vec<(&'static str, Vec<u8>)> {
+    let mut wrap = text(1 << 16, 77);
+    wrap[100] = b'#';
+    let mut b = wrap.clone();
+    b.remove(30_000);
+    wrap.extend_from_slice(&b);
+    vec![
+        ("v1-m1-text-l1.blz", text(20_000, 31)),
+        ("v1-m1-records-l1-streamed.blz", records(8_000)),
+        ("v1-m1-empty-l1.blz", vec![]),
+        ("v1-m1-text-l3.blz", text(5_000, 32)),
+        ("v1-m1-wrap-w16.blz", wrap),
+    ]
+}
+
+/// Run once by hand (cargo test --release -- --ignored write_fixtures) when ADDING fixtures for a
+/// new model id or format version; never to overwrite existing ones.
+#[test]
+#[ignore]
+fn write_fixtures() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, content) in fixture_contents() {
+        let path = dir.join(name);
+        if path.exists() {
+            continue; // never overwrite
+        }
+        let packed = match name {
+            "v1-m1-records-l1-streamed.blz" => {
+                let mut v = Vec::new();
+                compress_stream(&content[..], &mut v, &l1(), None).unwrap();
+                v
+            }
+            "v1-m1-text-l3.blz" => compress(&content, &Options::level(3)).unwrap(),
+            "v1-m1-wrap-w16.blz" => compress(&content, &Options::with_params(tiny(16))).unwrap(),
+            _ => compress(&content, &l1()).unwrap(),
+        };
+        std::fs::write(path, packed).unwrap();
+    }
+}
+
+/// Encoder stability + cross-platform determinism: these exact bytes must come out on every OS and
+/// CPU. If this fails on one platform only, decoding is not portable there: a release blocker.
+/// If it fails everywhere after an intentional model change, the change needs a NEW model id (old
+/// streams must keep decoding, see fixtures_decode_forever); only then pin the new values.
 #[test]
 fn golden_streams() {
     let cases: [(&str, Vec<u8>, u8); 4] = [
@@ -269,10 +444,52 @@ fn golden_streams() {
         assert_eq!(&decompress(&p).unwrap(), data);
     }
     let got = got.join(" ");
-    // std-math (parity-only) builds use the platform libm: not portable, so not pinned
-    if cfg!(not(feature = "std-math")) {
+    // blmz_std_math (parity-only) builds use the platform libm: not portable, so not pinned
+    if cfg!(not(blmz_std_math)) {
         assert_eq!(got, GOLDEN, "golden streams changed:\n got  {}\n want {}", got, GOLDEN);
     }
 }
 
 const GOLDEN: &str = "text-l1:2824:9cb32860 records-l1:1534:4e936fe3 random-l1:4056:b15bb47c text-l3:1018:d705d7df";
+
+/// Every hostile-header shape found in review (tables too big for 32-bit, or over the default
+/// memory limit) must come back as an error, never a panic or an allocation abort. The payload
+/// is empty, so nothing is touched beyond (lazily zeroed) allocation.
+#[test]
+fn hostile_headers_never_panic() {
+    let base = tiny(16);
+    let mut cases = Vec::new();
+    for (field, v) in [
+        ("obits", 27u8),
+        ("hbits", 29),
+        ("mbits", 29),
+        ("sbits", 25),
+        ("sbits", 26),
+        ("selvbits", 27),
+        ("selubits", 28),
+    ] {
+        let mut p = base;
+        match field {
+            "obits" => p.obits = v,
+            "hbits" => p.hbits = v,
+            "mbits" => p.mbits = v,
+            "sbits" => p.sbits = v,
+            "selvbits" => p.selvbits = v,
+            _ => p.selubits = v,
+        }
+        cases.push(p);
+    }
+    for p in cases {
+        for len in [None, Some(10)] {
+            let h = blmz::format::Header {
+                version: blmz::format::VERSION,
+                model_id: blmz::format::MODEL_ID,
+                level: 0,
+                params: p,
+                content_length: len,
+            };
+            let r = std::panic::catch_unwind(|| decompress(&h.to_bytes()));
+            assert!(matches!(r, Ok(Err(_))), "{:?} len {:?} -> {:?}", p, len, r.map(|x| x.err()));
+        }
+    }
+}

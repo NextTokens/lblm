@@ -13,9 +13,14 @@
 //! they give the same result on every IEEE-754 target. Changing ANY line of this file is a
 //! format change: it must bump the model id in `format.rs`.
 //!
-//! The `std-math` cargo feature swaps in the platform functions. It exists only to prove the port
-//! is bit-identical to the research engine `blmrs/src/bin/strong.rs` on the same machine; streams
-//! written with it carry a different model id and are refused by normal builds.
+//! Building with `RUSTFLAGS="--cfg blmz_std_math"` swaps in the platform functions. It exists only
+//! to prove the port is bit-identical to the research engine `blmrs/src/bin/strong.rs` on the same
+//! machine (tools/parity.sh); streams written by such a build carry a different model id and are
+//! refused by normal builds. It is a compiler cfg, not a Cargo feature, so no dependent crate can
+//! switch it on by accident.
+//!
+//! Basic operations are IEEE-exact only with SSE2 (or any non-x87) floating point: 32-bit x86
+//! without SSE2 is refused at compile time (lib.rs).
 //!
 //! Original notice of the vendored algorithms (exp, log, log2):
 //!
@@ -30,26 +35,26 @@
 //! ====================================================
 //! ```
 
-#[cfg(feature = "std-math")]
+#[cfg(blmz_std_math)]
 #[inline]
 pub fn ln(x: f64) -> f64 {
     x.ln()
 }
-#[cfg(feature = "std-math")]
+#[cfg(blmz_std_math)]
 #[inline]
 pub fn exp(x: f64) -> f64 {
     x.exp()
 }
-#[cfg(feature = "std-math")]
+#[cfg(blmz_std_math)]
 #[inline]
 pub fn log2(x: f64) -> f64 {
     x.log2()
 }
 
-#[cfg(not(feature = "std-math"))]
+#[cfg(not(blmz_std_math))]
 pub use portable::{exp, ln, log2};
 
-#[cfg_attr(feature = "std-math", allow(dead_code))]
+#[cfg_attr(blmz_std_math, allow(dead_code))]
 // vendored verbatim in substance: keep msun's constants and idioms exactly
 #[allow(clippy::eq_op, clippy::approx_constant, clippy::excessive_precision)]
 pub mod portable {

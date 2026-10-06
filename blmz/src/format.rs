@@ -28,10 +28,11 @@ pub const MAGIC: [u8; 4] = [0x89, b'B', b'L', b'Z'];
 pub const VERSION: u8 = 1;
 
 /// Model id 1: the strong.rs adopted default path with the frozen portable math (math.rs).
-#[cfg(not(feature = "std-math"))]
+#[cfg(not(blmz_std_math))]
 pub const MODEL_ID: u8 = 1;
-/// Model id 0x81: the same predictor on the PLATFORM libm. Not portable; parity testing only.
-#[cfg(feature = "std-math")]
+/// Model id 0x81: the same predictor on the PLATFORM libm. Not portable; parity testing only
+/// (`RUSTFLAGS="--cfg blmz_std_math"`).
+#[cfg(blmz_std_math)]
 pub const MODEL_ID: u8 = 0x81;
 
 pub const FLAG_LENGTH: u8 = 1;
@@ -72,19 +73,18 @@ impl Header {
     pub fn read_from<R: std::io::Read>(r: &mut R) -> Result<Header, crate::Error> {
         use crate::Error;
         let mut fixed = [0u8; 16];
-        read_exact_or(r, &mut fixed, Error::NotBlz)?;
+        read_exact_or(r, &mut fixed[..4], Error::NotBlz)?;
         if fixed[0..4] != MAGIC {
             return Err(Error::NotBlz);
         }
+        read_exact_or(r, &mut fixed[4..], Error::Truncated)?;
+        // the version decides the layout, so it is read before the (layout-dependent) CRC
         let version = fixed[4];
         if version != VERSION {
             return Err(Error::UnsupportedVersion(version));
         }
         let model_id = fixed[5];
         let flags = fixed[6];
-        if flags & !FLAG_LENGTH != 0 || fixed[15] != 0 {
-            return Err(Error::CorruptHeader("reserved bits set"));
-        }
         let mut all = fixed.to_vec();
         let content_length = if flags & FLAG_LENGTH != 0 {
             let mut l = [0u8; 8];
@@ -98,6 +98,9 @@ impl Header {
         read_exact_or(r, &mut c, Error::Truncated)?;
         if u32::from_le_bytes(c) != crate::crc32::crc32(&all) {
             return Err(Error::CorruptHeader("header checksum mismatch"));
+        }
+        if flags & !FLAG_LENGTH != 0 || fixed[15] != 0 {
+            return Err(Error::CorruptHeader("reserved bits set"));
         }
         if model_id != MODEL_ID {
             return Err(Error::UnsupportedModel(model_id));

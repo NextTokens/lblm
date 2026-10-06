@@ -17,8 +17,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # The golden-stream test pins exact compressed bytes, so running it on three OSes and two CPU
-  # architectures (macos-latest is arm64) is the cross-platform decodability check.
+  # The golden-stream test pins exact compressed bytes and the fixture test decodes committed
+  # streams, so running both on three OSes and two CPU architectures (macos-latest is arm64) is
+  # the cross-platform decodability check.
   test:
     name: test (${{ matrix.os }})
     strategy:
@@ -49,9 +50,24 @@ jobs:
         working-directory: blmz
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y gcc-multilib
-      - run: rustup toolchain install stable --profile minimal && rustup default stable && rustup target add i686-unknown-linux-gnu
-      - run: cargo test --release --target i686-unknown-linux-gnu
+      - run: rustup toolchain install stable --profile minimal && rustup default stable && rustup target add i686-unknown-linux-musl i586-unknown-linux-gnu
+      - run: cargo test --release --target i686-unknown-linux-musl
+      - name: x87-only targets must be refused at compile time
+        run: |
+          if cargo check --release --target i586-unknown-linux-gnu 2>err.txt; then
+            echo "i586 (x87) build unexpectedly succeeded"; exit 1
+          fi
+          grep -q "requires SSE2" err.txt
+
+  msrv:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blmz
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.78 --profile minimal
+      - run: cargo +1.78 test --release
 
   lint:
     runs-on: ubuntu-latest
@@ -63,6 +79,21 @@ jobs:
       - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
       - run: cargo fmt --check
       - run: cargo clippy --release --all-targets -- -D warnings
+
+  fuzz-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blmz
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install nightly --profile minimal && cargo +nightly install cargo-fuzz --locked
+      - run: cargo +nightly fuzz build
+      - name: short fuzz smoke run (60 s per target)
+        run: |
+          for t in decompress payload roundtrip; do
+            cargo +nightly fuzz run $t -- -max_total_time=60 -max_len=4096
+          done
 
   # The production predictor must stay bit-identical to the research engine's adopted defaults
   # (or ship as a new MODEL_ID). Corpora are not in the repo, so the gate runs on repo files.

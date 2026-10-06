@@ -5,7 +5,7 @@
 #   blmz/tools/parity.sh <file> [byte_cap=200000] [obits=20]
 #
 # Builds (1) a copy of strong.rs patched ONLY to print an FNV-1a hash of every per-bit
-# probability, and (2) blmz's trace example with the platform libm (feature std-math), then
+# probability, and (2) blmz's trace example with the platform libm (--cfg blmz_std_math), then
 # compares the two hashes. Any model change in strong.rs that should reach production must keep
 # this gate green against a matching change in blmz (or be released as a new MODEL_ID).
 set -euo pipefail
@@ -33,11 +33,12 @@ sub('    println!("  blmrs-strong  whole-stream',
 open(sys.argv[2], "w").write(s)
 PY
 rustc -O --edition 2021 "$work/strong_ref.rs" -o "$work/strong_ref" 2>/dev/null
-(cd "$here" && cargo build --quiet --release --features std-math --example trace)
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$here/target}"
+# separate target dir: a cfg'd build must never overwrite the portable binaries
+parity_target="$here/target/parity"
+(cd "$here" && RUSTFLAGS="--cfg blmz_std_math" CARGO_TARGET_DIR="$parity_target" cargo build --quiet --release --example trace)
 
 ref="$("$work/strong_ref" "$file" "$cap" "$obits" | grep phash)"
-got="$("$CARGO_TARGET_DIR/release/examples/trace" "$file" "$cap" "$obits" | grep phash)"
+got="$("$parity_target/release/examples/trace" "$file" "$cap" "$obits" | grep phash)"
 echo "research engine: $ref"
-echo "blmz (std-math): $got"
+echo "blmz (std math): $got"
 if [ "$ref" = "$got" ]; then echo "PARITY OK"; else echo "PARITY FAILED"; exit 1; fi

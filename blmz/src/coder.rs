@@ -146,6 +146,10 @@ impl<S: ByteSource> Decoder<S> {
     pub fn into_source(self) -> S {
         self.src
     }
+
+    pub fn source_mut(&mut self) -> &mut S {
+        &mut self.src
+    }
 }
 
 pub struct SliceSource<'a> {

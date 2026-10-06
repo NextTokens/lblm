@@ -2,7 +2,7 @@
 name = "blmz"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.78"
 description = "Production compressor built from the LBLM bit-native context-mixing engine (blmrs strong.rs, adopted defaults)."
 license = "Apache-2.0"
 readme = "README.md"
@@ -16,12 +16,11 @@ path = "src/lib.rs"
 name = "blmz"
 path = "src/bin/blmz.rs"
 
-[features]
-default = []
-# Use the platform libm (Rust std f64::ln/exp/log2) instead of the frozen portable math.
-# ONLY for parity tests against the research engine on the same machine: streams written with
-# this feature are NOT portable and are rejected by builds without it (different model id).
-std-math = []
+# Parity builds against the research engine use the platform libm via a compiler cfg (not a
+# feature, so no dependent crate can enable it): RUSTFLAGS="--cfg blmz_std_math". Such builds
+# write model id 0x81, which normal builds refuse. See tools/parity.sh.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(blmz_std_math)"] }
 
 [profile.release]
 opt-level = 3
