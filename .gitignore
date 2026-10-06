@@ -103,3 +103,7 @@ _cal/*.md
 secrets.json
 !jevprobe.py
 _96/*.md
+
+# blmz build output
+blmz/target/
+*.blmz-partial

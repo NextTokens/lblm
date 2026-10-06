@@ -1,0 +1,34 @@
+[package]
+name = "blmz"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "Production compressor built from the LBLM bit-native context-mixing engine (blmrs strong.rs, adopted defaults)."
+license = "Apache-2.0"
+readme = "README.md"
+publish = false
+
+[lib]
+name = "blmz"
+path = "src/lib.rs"
+
+[[bin]]
+name = "blmz"
+path = "src/bin/blmz.rs"
+
+[features]
+default = []
+# Use the platform libm (Rust std f64::ln/exp/log2) instead of the frozen portable math.
+# ONLY for parity tests against the research engine on the same machine: streams written with
+# this feature are NOT portable and are rejected by builds without it (different model id).
+std-math = []
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "unwind"
+debug = false
+
+[profile.test]
+opt-level = 3

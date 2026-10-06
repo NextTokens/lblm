@@ -1,0 +1,75 @@
+name: blmz
+
+on:
+  push:
+    paths:
+      - "blmz/**"
+      - "blmrs/src/bin/strong.rs"
+      - ".github/workflows/blmz.yml"
+  pull_request:
+    paths:
+      - "blmz/**"
+      - "blmrs/src/bin/strong.rs"
+      - ".github/workflows/blmz.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The golden-stream test pins exact compressed bytes, so running it on three OSes and two CPU
+  # architectures (macos-latest is arm64) is the cross-platform decodability check.
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: blmz
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - run: cargo test --release
+      - name: CLI round trip
+        shell: bash
+        run: |
+          cargo build --release
+          ./target/release/blmz -1 -o readme.blz ../README.md
+          ./target/release/blmz -t readme.blz
+          ./target/release/blmz -d -c readme.blz | cmp - ../README.md
+
+  test-32bit:
+    name: test (i686, 32-bit usize)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blmz
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y gcc-multilib
+      - run: rustup toolchain install stable --profile minimal && rustup default stable && rustup target add i686-unknown-linux-gnu
+      - run: cargo test --release --target i686-unknown-linux-gnu
+
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blmz
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
+      - run: cargo fmt --check
+      - run: cargo clippy --release --all-targets -- -D warnings
+
+  # The production predictor must stay bit-identical to the research engine's adopted defaults
+  # (or ship as a new MODEL_ID). Corpora are not in the repo, so the gate runs on repo files.
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - run: blmz/tools/parity.sh learned_binary_address_machine.md 200000 20
+      - run: blmz/tools/parity.sh current_design.png 150000 20
