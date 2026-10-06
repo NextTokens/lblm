@@ -119,7 +119,10 @@ impl Options {
 ///   zeros), so for untrusted input this is also the CPU-time limit. A declared content length in
 ///   the header is enforced too, but the sender chooses it.
 ///
-/// The defaults decode any stream this crate's levels produce; tighten both for untrusted data.
+/// The defaults are safe for untrusted input of ordinary size: enough memory for any level, and
+/// at most 1 GiB of output (hours of CPU at worst). For larger trusted archives use
+/// [`Limits::unbounded`] or raise `max_output`; the CLI decodes without an output limit unless
+/// `--max-output` is given.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Limits {
@@ -132,12 +135,16 @@ impl Default for Limits {
         // level 9 with an unknown length: ~1.7 GiB of tables + a 2 GiB window
         Limits {
             max_memory: 4 << 30,
-            max_output: u64::MAX,
+            max_output: 1 << 30,
         }
     }
 }
 
 impl Limits {
+    /// No output limit (trusted input only); memory as the default.
+    pub fn unbounded() -> Self {
+        Limits::default().max_output(u64::MAX)
+    }
     pub fn max_memory(mut self, bytes: u64) -> Self {
         self.max_memory = bytes;
         self

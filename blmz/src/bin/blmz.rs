@@ -206,7 +206,8 @@ fn is_broken_pipe(e: &(dyn std::error::Error + 'static)) -> bool {
 }
 
 fn limits(cli: &Cli) -> blmz::Limits {
-    blmz::Limits::default()
+    // like gzip/xz, the CLI decodes without an output limit unless --max-output is given
+    blmz::Limits::unbounded()
         .max_memory(cli.memlimit.saturating_mul(1 << 20))
         .max_output(cli.max_output)
 }
@@ -232,7 +233,7 @@ fn options(cli: &Cli, content_length: Option<u64>) -> Res<blmz::Options> {
 fn decode_all<R: BufRead, W: Write>(input: &mut R, mut out: W, limits: &blmz::Limits) -> Result<u64, blmz::Error> {
     let mut total = 0u64;
     loop {
-        let remaining = blmz::Limits::default()
+        let remaining = blmz::Limits::unbounded()
             .max_memory(limits.max_memory)
             .max_output(limits.max_output.saturating_sub(total));
         total += blmz::decompress_one(input, &mut out, &remaining)?;

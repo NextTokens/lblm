@@ -17,7 +17,7 @@ behind the project's enwik8 numbers) into a real codec. The research engine only
 
 ## Results
 
-Full Silesia corpus (211,938,580 bytes), level 6 (decode verification status: `ROADMAP.md`):
+Full Silesia corpus (211,938,580 bytes), level 6; all 12 streams decoded back byte-identical:
 
 | | blmz -6 | xz -9e | bzip2 -9 | gzip -9 |
 |---|---|---|---|---|
@@ -45,7 +45,7 @@ As a library:
 
 ```rust
 let packed = blmz::compress(&data, &blmz::Options::level(6))?;
-let data2 = blmz::decompress(&packed)?;                         // default limits
+let data2 = blmz::decompress(&packed)?;      // default limits: 4 GiB memory, 1 GiB output
 let strict = blmz::Limits::default().max_memory(512 << 20).max_output(1 << 30);
 let data3 = blmz::decompress_with_limits(&packed, &strict)?;
 blmz::compress_stream(reader, writer, &blmz::Options::default(), None)?;
@@ -83,8 +83,9 @@ prints every level.
   history) is checked before anything is allocated, and allocation failure is `Error::OutOfMemory`, not an
   abort. Truncation, bit flips, trailing data and I/O errors are typed errors (fuzzed, and reviewed with
   ~1,900 crafted streams). **Decompression bombs are inherent** — a few bytes can legitimately expand by
-  10^5+ — and decoding is as slow as encoding, so for untrusted data set `Limits::max_output` (CLI
-  `--max-output`): it bounds both output and CPU time.
+  10^5+ — and decoding is as slow as encoding, so `Limits::max_output` bounds both output and CPU time.
+  The library defaults to 1 GiB (`Limits::unbounded()` for large trusted archives); the CLI is unbounded
+  unless `--max-output` is given.
 * **Format stability**: any change to the predictor's arithmetic is a new model id, any layout change a
   new format version, and decoders keep every old pair; `tests/fixtures/` holds streams that must decode
   forever. Until 1.0 the format is a *preview*: see `ROADMAP.md` for the planned model-2 changes.
