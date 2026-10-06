@@ -107,3 +107,7 @@ _96/*.md
 # blmz build output
 blmz/target/
 *.blmz-partial
+blmz/fuzz/target/
+blmz/fuzz/corpus/
+blmz/fuzz/artifacts/
+blmz/fuzz/coverage/
