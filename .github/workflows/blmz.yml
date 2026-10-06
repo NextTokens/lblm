@@ -33,7 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable --profile minimal && rustup default stable
-      - run: cargo test --release
+      - run: cargo test --release --no-fail-fast
       - name: CLI round trip
         shell: bash
         run: |
@@ -51,7 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable --profile minimal && rustup default stable && rustup target add i686-unknown-linux-musl i586-unknown-linux-gnu
-      - run: cargo test --release --target i686-unknown-linux-musl
+      - run: cargo test --release --no-fail-fast --target i686-unknown-linux-musl
       - name: x87-only targets must be refused at compile time
         run: |
           if cargo check --release --target i586-unknown-linux-gnu 2>err.txt; then
@@ -67,7 +67,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install 1.78 --profile minimal
-      - run: cargo +1.78 test --release
+      - run: cargo +1.78 test --release --no-fail-fast
 
   lint:
     runs-on: ubuntu-latest

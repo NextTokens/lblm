@@ -201,7 +201,10 @@ fn non_utf8_file_names() {
     let d = Dir::new("nonutf8");
     let name = std::ffi::OsStr::from_bytes(b"caf\xe9.txt");
     let f = d.0.join(name);
-    fs::write(&f, sample()).unwrap();
+    if fs::write(&f, sample()).is_err() {
+        // some filesystems (APFS) refuse non-UTF-8 names outright: nothing to test there
+        return;
+    }
     let o = run(bin().args(["-1", "-q"]).arg(&f));
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     fs::remove_file(&f).unwrap();
