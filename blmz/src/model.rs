@@ -188,6 +188,26 @@ fn count_p(n0: u8, n1: u8) -> f64 {
     (n1 + DELTA) / (n0 + n1 + 2.0 * DELTA)
 }
 
+/// stretch(count_p(n0, n1)) for every (n0, n1): counts are 8-bit, so the 18 per-bit `ln` calls on
+/// count pairs become one table read each. Same function of the same inputs -> identical values.
+fn stretch_table() -> &'static [f64] {
+    static T: std::sync::OnceLock<Box<[f64]>> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        let mut t = vec![0.0f64; 1 << 16];
+        for n0 in 0..256usize {
+            for n1 in 0..256usize {
+                t[(n0 << 8) | n1] = stretch(count_p(n0 as u8, n1 as u8));
+            }
+        }
+        t.into_boxed_slice()
+    })
+}
+
+#[inline]
+fn st_count(t: &[f64], n0: u8, n1: u8) -> f64 {
+    t[((n0 as usize) << 8) | n1 as usize]
+}
+
 #[inline]
 fn sel_mix(mut h: u64) -> u64 {
     h ^= h >> 33;
@@ -386,6 +406,7 @@ impl MatchModel {
 /// The predictor. Call `p()` then `update(bit)` for each bit, most significant bit first.
 pub struct Model {
     params: Params,
+    st: &'static [f64],
     // flat count tables
     ord: Vec<Vec<Slot>>,      // NM x 2^obits
     sp: Vec<Vec<Slot>>,       // NSP x 2^obits
@@ -475,6 +496,7 @@ impl Model {
         ];
         Model {
             params,
+            st: stretch_table(),
             ord: (0..NM).map(|_| vec![[0u8; 3]; o]).collect(),
             sp: (0..NSP).map(|_| vec![[0u8; 3]; o]).collect(),
             wd: vec![[0u8; 3]; o],
@@ -554,6 +576,55 @@ impl Model {
         self.byte_pos
     }
 
+    /// Issue cache prefetches for the slots `p()` will read at (phase, cur). Mirrors the key
+    /// formulas in `p()`; a mismatch here would cost speed only, never correctness.
+    #[inline]
+    fn prefetch_bit(&self, phase: usize, cur: u64) {
+        let bp = self.byte_pos;
+        for k in 0..NM {
+            let l = if bp >= k as u64 { k } else { bp as usize };
+            let m = if 8 * l >= 64 { u64::MAX } else { (1u64 << (8 * l)) - 1 };
+            let key = (((1u64 << (8 * l + phase)) | ((self.htail & m) << phase) | cur) << 3) | phase as u64;
+            let ti = self.slot_index(key).0;
+            prefetch(&self.ord[k][ti]);
+            if (2..=6).contains(&k) {
+                prefetch(&self.icm_bh[k - 2][ti]);
+            }
+        }
+        let hmask = (1u64 << self.params.hbits) - 1;
+        for hk in 0..NH {
+            let slot = ((self.hbase[hk].wrapping_mul(2654435761) ^ (phase as u64).wrapping_mul(0x9E37_79B1) ^ cur.wrapping_mul(2246822519))
+                & hmask) as usize;
+            prefetch(&self.high[hk][slot]);
+        }
+        for j in 0..NSP {
+            let (oa, ob) = SPOFF[j];
+            let ba = if bp >= oa as u64 { self.hist.at(bp - oa as u64) as u64 } else { 0 };
+            let bb = if bp >= ob as u64 { self.hist.at(bp - ob as u64) as u64 } else { 0 };
+            let sk = (((((((1u64 << phase) | cur) << 8) | ba) << 8 | bb) << 5) | ((j as u64) << 3)) | (phase as u64);
+            prefetch(&self.sp[j][self.slot_index(sk).0]);
+        }
+        let low = (((1u64 << phase) | cur) << 3) | (phase as u64);
+        prefetch(&self.wd[self.slot_index((self.word_hash << 12) | low).0]);
+        let wctx = self
+            .prev_word_hash
+            .wrapping_mul(0x9E37_79B1)
+            .wrapping_add(self.word_hash.wrapping_mul(2654435761));
+        prefetch(&self.wd2[self.slot_index((wctx << 12) | low).0]);
+        if self.sel_active {
+            let ctx3 = self.htail & SELCTXMASK;
+            let vbits = self.params.selvbits as u32;
+            for j in 0..self.sel_nc {
+                let h = self.sl2[j].wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    ^ ctx3.wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+                    ^ (((phase << 7) | cur as usize) as u64).wrapping_mul(0x1656_67B1_9E37_79F9);
+                let ix = (sel_mix(h) >> (64 - vbits)) as usize;
+                prefetch(&self.selvt[ix]);
+                prefetch(&self.selvtg[ix]);
+            }
+        }
+    }
+
     #[inline]
     fn slot_index(&self, key: u64) -> (usize, u8) {
         let obits = self.params.obits as u32;
@@ -591,7 +662,7 @@ impl Model {
                 *s = [want, 0, 0];
             }
             self.oslot[k] = ti;
-            self.sts[k] = stretch(count_p(s[1], s[2]));
+            self.sts[k] = st_count(self.st, s[1], s[2]);
         }
         // hashed high orders (merged, untagged)
         let hmask = (1u64 << self.params.hbits) - 1;
@@ -601,7 +672,7 @@ impl Model {
                 as usize;
             self.hslot[hk] = slot;
             let c = self.high[hk][slot];
-            self.sts[NM + hk] = stretch(count_p(c[0], c[1]));
+            self.sts[NM + hk] = st_count(self.st, c[0], c[1]);
         }
         // sparse byte pairs
         for j in 0..NSP {
@@ -615,7 +686,7 @@ impl Model {
                 *s = [want, 0, 0];
             }
             self.sp_slot[j] = ti;
-            self.sts[NM + NH + j] = stretch(count_p(s[1], s[2]));
+            self.sts[NM + NH + j] = st_count(self.st, s[1], s[2]);
         }
         // word and previous-word
         {
@@ -626,7 +697,7 @@ impl Model {
                 *s = [want, 0, 0];
             }
             self.wd_slot = ti;
-            self.sts[NM + NH + NSP] = stretch(count_p(s[1], s[2]));
+            self.sts[NM + NH + NSP] = st_count(self.st, s[1], s[2]);
         }
         {
             let wctx = self
@@ -640,7 +711,7 @@ impl Model {
                 *s = [want, 0, 0];
             }
             self.wd2_slot = ti;
-            self.sts[NM + NH + NSP + 1] = stretch(count_p(s[1], s[2]));
+            self.sts[NM + NH + NSP + 1] = st_count(self.st, s[1], s[2]);
         }
         self.sts[NM + NH + NSP + 2] = self.mm.predicted(&self.hist, phase, bp);
         self.sts[NM + NH + NSP + 3] = self.mm2.predicted(&self.hist, phase, bp);
@@ -695,18 +766,15 @@ impl Model {
         let pb = self.prev_byte;
         self.sel = ((phase << 8) | pb as usize) & (NSEL - 1);
         self.sel2 = ((phase << 11) | ((pb.wrapping_mul(769) ^ self.prev2.wrapping_mul(2246822519)) as usize & 2047)) & (NSEL2 - 1);
+        // three dot products in one loop: each accumulator keeps strong.rs's exact summation
+        // order, but the three dependency chains overlap in the pipeline
         let sts = &self.sts;
-        let mut d = 0.0;
-        for (w, s) in self.mixers[self.sel].iter().zip(sts) {
-            d += w * s;
-        }
-        let mut d2 = 0.0;
-        for (w, s) in self.mixers2[self.sel2].iter().zip(sts) {
-            d2 += w * s;
-        }
-        let mut dg = 0.0;
-        for (w, s) in self.gmix.iter().zip(sts) {
-            dg += w * s;
+        let (w1, w2, wg) = (&self.mixers[self.sel], &self.mixers2[self.sel2], &self.gmix);
+        let (mut d, mut d2, mut dg) = (0.0f64, 0.0f64, 0.0f64);
+        for k in 0..NW {
+            d += w1[k] * sts[k];
+            d2 += w2[k] * sts[k];
+            dg += wg[k] * sts[k];
         }
         self.p_sel = squash(d);
         self.p_sel2 = squash(d2);
@@ -741,6 +809,11 @@ impl Model {
         self.pending = false;
         let y = (y & 1) as usize;
         let yf = y as f64;
+        if self.phase < 7 {
+            // the next bit's table slots are known now: start their cache misses before the
+            // mixer updates below (a hint only; never changes a value)
+            self.prefetch_bit(self.phase + 1, (self.cur << 1) | y as u64);
+        }
 
         // final mixer
         let em = yf - self.p_mix;
@@ -980,6 +1053,17 @@ impl Model {
             self.hbase[hk] = hv;
         }
     }
+}
+
+#[inline(always)]
+fn prefetch<T>(r: &T) {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: prefetch is a hint; any address is allowed and nothing is dereferenced.
+    unsafe {
+        std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(r as *const T as *const i8);
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = r;
 }
 
 #[inline]
