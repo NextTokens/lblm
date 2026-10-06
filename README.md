@@ -36,8 +36,15 @@ A from-scratch bit-native predictor **beats gzip, bzip2, and PPMd** and reaches 
 quality kept improving with data right to the full file (0.224 → 0.219 → 0.209 at 10 → 30 → 100 MB).
 *(The engine was since improved — §63: richer text-structure models, tuning, and indirect bit-history
 StateMaps (ICM) give **~3.4 % lower bits/bit** (whole-stream, `obits 25`) on an 11 MB text proxy — and up
-to ~5 % on code — measured against a frozen, reproducible baseline binary; enwik8 wasn't re-run, so the
-0.209 figure is a conservative floor for the current engine.)*
+to ~5 % on code — measured against a frozen, reproducible baseline binary. enwik8 was re-run as the defaults
+evolved: the current default engine reaches **0.195525 bits/bit (19.55 MB)**, ledger §91B; the §86 figure
+0.194567 was withdrawn there. All of these are model cross-entropy, not coded files.)*
+
+> **Production codec: [`blmz/`](blmz/).** The adopted default model, packaged as a real compressor (arithmetic
+> coder, versioned `.blz` format, decoder, portable math, limits, tests, CI) and proven bit-identical to
+> `strong.rs` per bit. Real coded sizes, full Silesia corpus at level 6: **42,037,924 bytes, −13.2 % vs
+> `xz -9e`**, all 12 files round-trip verified — at ~50–80 KB/s per core. Where it stands against zpaq, kanzi
+> and paq8px, and the plan to production: [`blmz/ROADMAP.md`](blmz/ROADMAP.md).
 Not SOTA (that needs far more models + GB-scale tuned memory + cache-aware engineering), but a real,
 defensible result for a predictor built from first principles. Compression = prediction = learning:
 this is the bit-native analogue of an LLM's perplexity, on real data.
@@ -135,6 +142,7 @@ RMSProp. See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`FLOW.md`](FLOW.md), and
 | [`blm.py`](blm.py) | The original learned-address memory machine (SOM learning, recurrent addresses, latch) |
 | `mix.py` / `mixfast.py` | Online logistic context mixing (the simple model); `mixfast` uses lossless integer keys |
 | `mixns.py` / `mixnsfast.py` / `mixnshash.py` | The strong model: high orders, match, sparse/word, two-layer mixer, SSE, non-stationarity, RMSProp |
+| [`blmz/`](blmz/) | **The production compressor** — `blmz` CLI + library: the adopted `strong.rs` model as a real, portable, verified codec (`.blz` format: [`FORMAT.md`](blmz/FORMAT.md); plan: [`ROADMAP.md`](blmz/ROADMAP.md)) |
 | [`blmrs/`](blmrs/) | **The Rust core** — `blmrs` (simple), `blmrs-strong` (strong; the enwik8 headline), `blmrs-dna` (genomes at chromosome scale, §55), and `blmrs-induced` (discovers the unit itself: byte/codon, + folded match/reverse-complement, §56–57) |
 | `mdp.py` / `action.py` / `decide.py` / `stream.py` | Sequential RL, reward-driven action, confidence-gated decisions, anomaly detection |
 | `aggregate.py` / `parity.py` / `learn_state.py` / `compose.py` | Learn-the-computation: compute-vs-hold, selecting & composing the recurrent computation |
