@@ -13,7 +13,7 @@ behind the project's enwik8 numbers) into a real codec. The research engine only
 | config | env vars + argv, silent fallbacks | table sizes in a CRC-checked header; validated |
 | memory | ~10× the input + ~1.5 GB of tables | levels 1–9: 36 MiB … 3.7 GiB worst case (tables + history window) |
 | untrusted input | panics/aborts on bad params | typed errors; memory and output limits checked before allocating |
-| speed (same tables) | 1× | ~1.6–1.8× (same probabilities; cache-friendly layout, prefetching) |
+| speed (same tables) | 1× | ~2.1× (same probabilities; count-pair stretch table, compact slots, prefetching) |
 
 ## Results
 
@@ -24,9 +24,25 @@ Full Silesia corpus (211,938,580 bytes), level 6; all 12 streams decoded back by
 | total bytes | **42,037,924** | 48,456,004 | 54,506,769 | 67,631,990 |
 | vs xz | **−13.2 %** | — | +12.5 % | +39.6 % |
 
-It beats xz -9e on 11 of 12 files (text −22…−29 %, x-ray −18 %, osdb −20 %) and loses on `sao`
+It beats xz -9e on 11 of 12 files (text −13.5…−28.5 %, x-ray −18 %, osdb −20 %) and loses on `sao`
 (+1.6 %, binary star records). Speed: ~54 KB/s per core in both directions (contended 4-core
-Xeon), i.e. roughly 1 hour per GB. Per-file numbers: `ROADMAP.md`.
+Xeon), i.e. **about 5 hours per GB** each way.
+
+**It is not on the speed/ratio frontier yet.** Stronger, faster codecs exist:
+
+| | bytes | vs blmz -6 | speed |
+|---|---|---|---|
+| full `dickens` — blmz -6 | 2,198,331 | — | 52 KB/s |
+| zpaq 7.15 -m5 (measured, same host) | 2,094,742 | −4.7 % | ~184 KB/s |
+| kanzi 2.6 -9 (measured, same host) | 2,140,182 | −2.6 % | ~1.1 MB/s |
+| full Silesia — blmz -6 | 42,037,924 | — | 54 KB/s |
+| zpaq -m5 (published) | 39,113,069 | −7.0 % | — |
+| kanzi -9 (published, lzbench) | 41,809,254 | −0.5 % | 2.48 MB/s (EPYC) |
+| paq8px v217 -12L (published) | 27,682,006 | −34 % | ~3.3 KB/s |
+
+blmz's assets today are a format that decodes forever, bit-exact on every platform, and a text-strong model; its gap
+is speed (the research engine's ideal size beats zpaq on 1 MB slices of xml, reymont and webster, but not on full
+dickens). [`ROADMAP.md`](ROADMAP.md) is the plan to close it, with go/no-go gates.
 
 ## Use
 
@@ -62,10 +78,12 @@ small-cache desktops). Memory: tables, plus history up to the window (only as mu
 | level | tables | window | worst case | bits/bit | KB/s |
 |---|---|---|---|---|---|
 | 1 | 20 MiB | 16 MiB | 36 MiB | 0.2673 | 83 |
-| 4 | 66 MiB | 128 MiB | 194 MiB | 0.2500 | 57 |
-| 6 (default) | 223 MiB | 256 MiB | 479 MiB | 0.2473 | 51 |
-| 7 | 433 MiB | 512 MiB | 945 MiB | 0.2468 | 47 |
-| 9 | 1.65 GiB | 2 GiB | 3.65 GiB | 0.2464 | 34 |
+| 4 | 67 MiB | 128 MiB | 195 MiB | 0.2500 | 57 |
+| 6 (default) | 229 MiB | 256 MiB | 485 MiB | 0.2473 | 51 |
+| 7 | 445 MiB | 512 MiB | 957 MiB | 0.2468 | 47 |
+| 9 | 1.70 GiB | 2 GiB | 3.70 GiB | 0.2464 | 34 |
+
+(Speeds measured before the last format-preserving speedup, the ICM fold: ~10–14 % faster now; same ratios.)
 
 Larger inputs benefit more from larger tables (the research enwik8 runs used 2^27-slot tables).
 Use `Options::with_params(Params { .. })` for custom table sizes; `cargo run --example levels`
