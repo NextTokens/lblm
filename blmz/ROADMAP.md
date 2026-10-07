@@ -35,7 +35,11 @@ the evidence does not define every competitor's unit — a ≤ 2.4 % ambiguity, 
    built for speed** (model 2) plus frames on every core.
 3. **The text lead is narrower than the headline**, so M0 re-tests it at full size before the 10–16 eng-week model-2
    spend (go/no-go D2).
-4. **Beachhead:** write-once, read-rarely text archives, library-first; non-goals are explicit (§3.4).
+4. **Product: a general-purpose high-ratio codec for data that is written once and read rarely** — storage is scarce
+   and compression demand is broad, so the target is the general cold/warm tier (backups, archives, datasets, logs,
+   binaries), not a text niche. Text is where blmz already leads; general data is where the measured gaps are, and that
+   is what the model work targets (§3, M4). Delivery is library/CLI first and must be **SaaS-ready**: per-job CPU and
+   memory bounds, cancellation, progress, metering (§3.3). Non-goals are explicit (§3.4).
 5. **Research culture becomes CI-enforced change control:** pre-registration → an RFC committed alone; "flag=0 recovers
    bit-identically" → a gate; a red-team gates every freeze (§5).
 
@@ -156,25 +160,34 @@ M4, which projects their sum.
 ## 3. Positioning, beachhead, non-goals
 
 ### 3.1 Position
-**The highest-ratio text codec that still behaves like a codec:** a frozen format that decodes forever, bit-exact on
-every IEEE platform, bounded memory, safe on untrusted input, and **no slower than zpaq -m5**. Forever-decodability is
-necessary but not a differentiator — zpaq has it [S] and dominates blmz; paq8px and cmix own the ratio frontier but
-break compatibility [S]; kanzi -9 matches blmz's aggregate ratio far faster [M]. **The open slot: text ratio between
-zpaq -m5 and Gleipnir, at zpaq speed and zpaq-grade stability.**
+**A general-purpose, highest-practical-ratio codec for cold and warm storage that still behaves like a codec:** a
+frozen format that decodes forever, bit-exact on every IEEE platform, bounded memory and CPU per job, safe on untrusted
+input, and **no slower than zpaq -m5**. Storage is scarce and compression demand is broad, so the product is judged on
+*general* data (Silesia's binaries, records, executables and images as much as its text), delivered as a library and
+CLI that a hosted service can meter. Forever-decodability is necessary but not a differentiator — zpaq has it [S] and
+dominates blmz; paq8px and cmix own the ratio frontier but break compatibility [S]; kanzi -9 matches blmz's aggregate
+ratio far faster [M]. **The open slot: ratio between zpaq -m5 and Gleipnir on general data, at zpaq speed and
+zpaq-grade stability.** Text ratio is today's strength, not the product boundary.
 
-### 3.2 Why speed decides whether there is a market
+### 3.2 Why speed decides whether there is a market (and why it depends on who pays for CPU)
 Inference [I], assuming CM output 15–25 % smaller than xz, $0.02/core-hour, Deep Archive pricing [S] and S3 Standard
 pricing as recalled. At **50 KB/s** (today) the extra CPU pays back against storage saved in 160–266 years on Deep
 Archive and 7–12 years on S3 Standard, and over a network CM wins end-to-end only below ~14–23 kbit/s. At **1 MB/s**
 these become 5–9 years, 0.2–0.4 years and ~280–460 kbit/s. Every restore pays the CPU again. **Speed sets the size of
-the market:** at ~1 MB/s, S3-Standard-class text archives pay back in months; the cheapest cold tier still takes 5–9 years.
+the market:** at ~1 MB/s, S3-Standard-class archives pay back in months; the cheapest cold tier still takes 5–9 years.
+**Two deployment cases, two gates.** *Hosted / SaaS:* compute is billed per job, so the payback math above applies and
+M3's speed gate decides viability; per-job CPU must be bounded and metered (`max_output` is already a CPU budget; add
+cancellation and progress in M1). *Self-hosted on idle machines (capacity-constrained, CPU effectively free):* the
+metric is bytes reclaimed per idle core-hour, and M2's multithreading alone makes blmz usable for a cold backlog today
+(8 cores ≈ 430 KB/s ≈ 35 GB/day per machine [D]) — provided the data is rarely read back, because restore costs the same.
 
-### 3.3 Beachhead candidates
+### 3.3 Target segments and delivery
 
-| candidate | evidence | verdict |
+| segment | evidence | verdict |
 |---|---|---|
-| B1: text-heavy archives on pricier tiers (legal/compliance, mail, wiki/book corpora) | the measured lead over zpaq is on text only (−2…−5 % on slices, engine ideal [M]); against xz, full text files are −13.5…−28.5 % (nci … reymont) [M]; written once, read rarely | **primary**, if D2 says go |
-| B2: a "max ratio" option inside an existing tool | distribution without building an archiver; the library API exists | **channel** for B1 |
+| B0: general cold/warm storage reclamation (backups, archives, datasets, logs, binaries; self-hosted or hosted) | full Silesia −13.2 % vs xz but +7.0 % vs zpaq -m5; the losses are on records (sao +1.6 % vs xz), executables (mozilla −1.4 %), images (~8 % under bzip2) [M]; measured levers exist for each (M4) | **primary**: the storage market is general data; M4's per-type work is the product work, not a follow-up |
+| B1: text-heavy archives (legal/compliance, mail, wiki/book corpora) | the measured lead over zpaq is on text only (−2…−5 % on slices, engine ideal [M]); against xz, full text files are −13.5…−28.5 % (nci … reymont) [M] | **first proof point** inside B0: the segment where blmz can be best today, used to validate the pipeline, not the product boundary |
+| B2: embedded in an existing tool, or a hosted compression service | the library API exists; SaaS needs metering, cancellation, progress, per-tenant limits (M1) | **channels** for B0 |
 | B3: very-low-bandwidth links (LoRa, satellite IoT, HF) | today's speed already wins below ~14–23 kbit/s [I] | **parked**: small messages, 36 MiB at L1, 47 B overhead, cold model; needs a primed small model |
 | B4: LTCB entry after the freeze; genomics (`dna.rs`: E. coli 1.908, chr21 1.6255 bits/base, ledger cross-entropy, not re-measured [repo]), logs | cheap credibility [I]; CRAM 3.1 fqzcomp is already CM, CLP/OpenZL serve logs [S] | LTCB **at 1.0**; domains **no** |
 
@@ -203,6 +216,13 @@ the market:** at ~1 MB/s, S3-Standard-class text archives pay back in months; th
 engineer. Total 31–47 eng-weeks: ~7–11 months for one engineer, ~6–9 for two. **Model 2 freezes at the end of M4**, not
 M3, so 1.0 adds exactly one released id; container v2 freezes when it first ships (D7).
 
+**Ordering for a general-storage product.** M2 (frames, stored blocks, threads) is pulled forward to ship as the 0.2
+preview as soon as G1/G2 pass: it is the first version a capacity-constrained self-hosted user can run on a cold
+backlog with all cores, and it stops burning CPU on incompressible data. M3 and M4 are one programme ("model 2"): M4's
+per-type routing is not a refinement after the fast core but the part that makes the ratio competitive on the data
+that fills storage, so its RFCs are written during M3 and its levers are benchmarked on the fast core as it lands.
+For a hosted service M3's speed gate still decides viability (§3.2).
+
 ### M0: Measurement truth (first; 3–4 eng-weeks [A])
 **Goal.** Replace contended, slice-based, wall/CPU-mixed numbers with the §6 protocol; re-test the text premise at full
 size before the throughput spend.
@@ -229,8 +249,8 @@ zpaq -m5 and kanzi -9 on T and enwik8. **G0.3** The blmz profile. **G0.4** The f
 default. **G0.5** The discovery reports.
 
 **Decision point D2** (pre-registered now). Proceed if blmz -9 is smaller than zpaq -m5 on T's total and on most T
-files. Otherwise the lead is a small-input effect: M3's ratio budget goes to zero and M4's text levers move ahead of M3,
-or the beachhead is re-chosen.
+files. Otherwise the text lead is a small-input effect: M3's ratio budget goes to zero and M4's per-type levers (the
+general-data work) become the whole ratio case for model 2.
 
 **Risks.** No uncontended host yet; enwik8 blocked here; ~2 CPU-hours per full-Silesia configuration [D].
 
@@ -488,7 +508,7 @@ model, measured by §6; cross-entropy is never a product number.
 
 | # | decision | options | recommendation | by |
 |---|---|---|---|---|
-| D1 | beachhead and channel | B1 archives / B3 links / research artefact only | **B1 via B2**; supply H; name a partner pipeline before M5 | M0 end |
+| D1 | product form and first proof point | library+CLI embedded in tools / hosted service / both | **both, library first**; B0 general cold storage is the product, B1 text archives the first proof point; decide hosted vs self-hosted pricing before M3, since it sets whether speed or idle-CPU economics gate 0.x adoption | M0 end |
 | D2 | go/no-go on the text premise | proceed / text levers before M3 / re-choose beachhead | **pre-register the M0 criterion now**; proceed only if G0.2 meets it | M0 end |
 | D3 | priority vs the intelligence track | compressor first (2 engineers; no research adoptions until model 2 freezes) / shared / research first (blmz stays 0.1) | **compressor first if D2 says go**, with M3's kill criterion | M0 end |
 | D4 | model-2 numerics | f32 SIMD with normative reduction / integer fixed point | **pre-register both; integer wins a tie** (no float spec, easier second implementation, WASM) | M3 RFC |
